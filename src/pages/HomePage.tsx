@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import AppTitleBar from "../shared/components/AppTitleBar";
 import NavigationSidebar from "../shared/components/NavigationSidebar";
 
 type HomePageProps = {
@@ -26,60 +26,12 @@ export default function HomePage({
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isSidebarOpen]);
 
-  const appWindow = getCurrentWindow();
-
   return (
     <div className="home-page">
-      <div
-        className="app-titlebar"
-        data-tauri-drag-region
-      >
-        <button
-          className="titlebar-menu-button"
-          type="button"
-          aria-label="Open navigation"
-          aria-controls="keynest-sidebar"
-          aria-expanded={isSidebarOpen}
-          onClick={() => setIsSidebarOpen((isOpen) => !isOpen)}
-        >
-          <span />
-          <span />
-          <span />
-        </button>
-
-        <div
-          className="titlebar-app-name"
-          data-tauri-drag-region
-          onDoubleClick={() => void appWindow.toggleMaximize()}
-        >
-          <span data-tauri-drag-region>KeyNest</span>
-        </div>
-
-        <div className="titlebar-window-controls">
-          <button
-            type="button"
-            aria-label="Minimize window"
-            onClick={() => void appWindow.minimize()}
-          >
-            <span className="window-minimize" />
-          </button>
-          <button
-            type="button"
-            aria-label="Maximize window"
-            onClick={() => void appWindow.toggleMaximize()}
-          >
-            <span className="window-maximize" />
-          </button>
-          <button
-            className="window-close-button"
-            type="button"
-            aria-label="Close window"
-            onClick={() => void appWindow.close()}
-          >
-            <span className="window-close" />
-          </button>
-        </div>
-      </div>
+      <AppTitleBar
+        isNavigationOpen={isSidebarOpen}
+        onOpenNavigation={() => setIsSidebarOpen((isOpen) => !isOpen)}
+      />
 
       <NavigationSidebar
         isOpen={isSidebarOpen}
