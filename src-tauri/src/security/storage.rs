@@ -101,8 +101,8 @@ impl ProfileStore {
     }
 
     pub(crate) fn reset(&self) -> Result<(), StorageError> {
-        remove_if_present(&self.profile_path())?;
         remove_if_present(&self.vault_path())?;
+        remove_if_present(&self.profile_path())?;
         Ok(())
     }
 
@@ -229,5 +229,16 @@ mod tests {
         assert!(!temp.path().join("profile.json").exists());
         assert!(!temp.path().join("vault.enc").exists());
         assert!(temp.path().join("keep.txt").exists());
+    }
+
+    #[test]
+    fn failed_vault_deletion_preserves_profile_for_a_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        std::fs::write(temp.path().join("profile.json"), b"profile").unwrap();
+        std::fs::create_dir(temp.path().join("vault.enc")).unwrap();
+
+        assert!(matches!(store.reset(), Err(StorageError::Io(_))));
+        assert!(temp.path().join("profile.json").exists());
     }
 }

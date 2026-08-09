@@ -131,16 +131,19 @@ pub(crate) fn unwrap_vault_key(
     let wrapping_key = derive_wrapping_key(password, &salt, wrapped.params)?;
     let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
         .map_err(|_| CryptoError::InvalidParameters)?;
-    let plaintext = cipher
-        .decrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: &ciphertext,
-                aad: PROFILE_AAD,
-            },
-        )
-        .map_err(|_| CryptoError::AuthenticationFailed)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: PROFILE_AAD,
+                },
+            )
+            .map_err(|_| CryptoError::AuthenticationFailed)?,
+    );
     let key: [u8; VAULT_KEY_LENGTH] = plaintext
+        .as_slice()
         .try_into()
         .map_err(|_| CryptoError::InvalidMetadata)?;
 
