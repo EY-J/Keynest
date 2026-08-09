@@ -194,12 +194,8 @@ mod tests {
     #[test]
     fn correct_password_unwraps_the_generated_vault_key() {
         let entropy = FixedEntropy;
-        let (wrapped, original) = wrap_new_vault_key(
-            "a secure master password",
-            KdfParams::testing(),
-            &entropy,
-        )
-        .unwrap();
+        let (wrapped, original) =
+            wrap_new_vault_key("a secure master password", KdfParams::testing(), &entropy).unwrap();
 
         let unlocked = unwrap_vault_key("a secure master password", &wrapped).unwrap();
 
@@ -209,12 +205,8 @@ mod tests {
     #[test]
     fn incorrect_password_cannot_unwrap_the_vault_key() {
         let entropy = FixedEntropy;
-        let (wrapped, _) = wrap_new_vault_key(
-            "a secure master password",
-            KdfParams::testing(),
-            &entropy,
-        )
-        .unwrap();
+        let (wrapped, _) =
+            wrap_new_vault_key("a secure master password", KdfParams::testing(), &entropy).unwrap();
 
         assert!(matches!(
             unwrap_vault_key("the wrong master password", &wrapped),
@@ -225,12 +217,8 @@ mod tests {
     #[test]
     fn tampered_ciphertext_fails_authentication() {
         let entropy = FixedEntropy;
-        let (mut wrapped, _) = wrap_new_vault_key(
-            "a secure master password",
-            KdfParams::testing(),
-            &entropy,
-        )
-        .unwrap();
+        let (mut wrapped, _) =
+            wrap_new_vault_key("a secure master password", KdfParams::testing(), &entropy).unwrap();
         let mut ciphertext = STANDARD.decode(&wrapped.ciphertext).unwrap();
         ciphertext[0] ^= 1;
         wrapped.ciphertext = STANDARD.encode(ciphertext);

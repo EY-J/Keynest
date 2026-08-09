@@ -84,8 +84,7 @@ impl ProfileStore {
         fs::create_dir_all(&self.app_data_dir).map_err(StorageError::Io)?;
 
         let bytes = serde_json::to_vec_pretty(profile).map_err(StorageError::Serialization)?;
-        let mut temporary =
-            NamedTempFile::new_in(&self.app_data_dir).map_err(StorageError::Io)?;
+        let mut temporary = NamedTempFile::new_in(&self.app_data_dir).map_err(StorageError::Io)?;
         temporary.write_all(&bytes).map_err(StorageError::Io)?;
         temporary.flush().map_err(StorageError::Io)?;
         temporary.as_file().sync_all().map_err(StorageError::Io)?;
@@ -149,9 +148,7 @@ fn remove_if_present(path: &Path) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::crypto::{
-        wrap_new_vault_key, CryptoError, EntropySource, KdfParams,
-    };
+    use crate::security::crypto::{wrap_new_vault_key, CryptoError, EntropySource, KdfParams};
 
     struct FixedEntropy;
 
@@ -166,12 +163,8 @@ mod tests {
     }
 
     fn profile_fixture(password: &str) -> (StoredProfile, Vec<u8>) {
-        let (wrapped, vault_key) = wrap_new_vault_key(
-            password,
-            KdfParams::testing(),
-            &FixedEntropy,
-        )
-        .unwrap();
+        let (wrapped, vault_key) =
+            wrap_new_vault_key(password, KdfParams::testing(), &FixedEntropy).unwrap();
         (
             StoredProfile::new(wrapped),
             vault_key.expose_for_test().to_vec(),
@@ -186,10 +179,7 @@ mod tests {
 
         std::fs::write(temp.path().join("profile.json"), b"not-json").unwrap();
 
-        assert!(matches!(
-            store.load(),
-            Err(StorageError::DamagedProfile)
-        ));
+        assert!(matches!(store.load(), Err(StorageError::DamagedProfile)));
     }
 
     #[test]
@@ -223,10 +213,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
-            store.load(),
-            Err(StorageError::DamagedProfile)
-        ));
+        assert!(matches!(store.load(), Err(StorageError::DamagedProfile)));
     }
 
     #[test]
