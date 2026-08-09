@@ -48,7 +48,7 @@ impl VaultKey {
     }
 
     #[cfg(test)]
-    fn expose_for_test(&self) -> &[u8; VAULT_KEY_LENGTH] {
+    pub(crate) fn expose_for_test(&self) -> &[u8; VAULT_KEY_LENGTH] {
         self.expose()
     }
 }
