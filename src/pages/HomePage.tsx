@@ -4,10 +4,12 @@ import NavigationSidebar from "../shared/components/NavigationSidebar";
 
 type HomePageProps = {
   onOpenPasswordVault: () => void;
+  onLockKeynest: () => Promise<void>;
 };
 
 export default function HomePage({
   onOpenPasswordVault,
+  onLockKeynest,
 }: HomePageProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -37,6 +39,7 @@ export default function HomePage({
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         onOpenPasswordVault={onOpenPasswordVault}
+        onLockKeynest={onLockKeynest}
       />
 
       <button

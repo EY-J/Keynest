@@ -1,4 +1,5 @@
 import "../App.css";
+import AuthGate from "../features/auth/components/AuthGate";
 import HomePage from "../pages/HomePage";
 
 export default function App() {
@@ -7,8 +8,13 @@ export default function App() {
   }
 
   return (
-    <HomePage
-      onOpenPasswordVault={openPasswordVault}
-    />
+    <AuthGate>
+      {({ lock }) => (
+        <HomePage
+          onOpenPasswordVault={openPasswordVault}
+          onLockKeynest={lock}
+        />
+      )}
+    </AuthGate>
   );
 }

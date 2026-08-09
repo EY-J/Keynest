@@ -2,16 +2,23 @@ type NavigationSidebarProps = {
   isOpen: boolean;
   onClose: () => void;
   onOpenPasswordVault: () => void;
+  onLockKeynest: () => Promise<void>;
 };
 
 export default function NavigationSidebar({
   isOpen,
   onClose,
   onOpenPasswordVault,
+  onLockKeynest,
 }: NavigationSidebarProps) {
   function openPasswordVault() {
     onOpenPasswordVault();
     onClose();
+  }
+
+  function lockKeynest() {
+    onClose();
+    void onLockKeynest();
   }
 
   return (
@@ -100,7 +107,11 @@ export default function NavigationSidebar({
           <span>Settings</span>
         </button>
 
-        <button className="sidebar-link sidebar-lock-button" type="button">
+        <button
+          className="sidebar-link sidebar-lock-button"
+          type="button"
+          onClick={lockKeynest}
+        >
           <span className="sidebar-link-icon" aria-hidden="true">
             ↪
           </span>
