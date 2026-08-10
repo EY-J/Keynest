@@ -18,7 +18,7 @@ export default function AuthLayout({
     <div className="auth-shell">
       <AppTitleBar />
       <main className="auth-page">
-        <section className="auth-card" aria-labelledby="auth-title">
+        <section className="auth-content" aria-labelledby="auth-title">
           <div className="auth-mark" aria-hidden="true">
             K
           </div>
