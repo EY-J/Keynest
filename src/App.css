@@ -573,6 +573,7 @@ button {
 .reset-dialog {
   width: min(440px, 100%);
   padding: 30px;
+  text-align: left;
   border: 1px solid rgba(238, 139, 139, 0.28);
   border-radius: 20px;
   background: #111815;
