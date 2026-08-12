@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import AppTitleBar from "../shared/components/AppTitleBar";
+import BrandMark from "../shared/components/BrandMark";
 import NavigationSidebar from "../shared/components/NavigationSidebar";
 
 type HomePageProps = {
@@ -52,7 +53,7 @@ export default function HomePage({
 
       <header className="topbar">
         <div className="brand">
-          <div className="logo">K</div>
+          <BrandMark className="logo" />
 
           <div>
             <h2>KeyNest</h2>

@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import BrandMark from "./BrandMark";
 
 type AppTitleBarProps = {
   isNavigationOpen?: boolean;
@@ -35,6 +36,7 @@ export default function AppTitleBar({
         data-tauri-drag-region
         onDoubleClick={() => void appWindow?.toggleMaximize()}
       >
+        <BrandMark className="titlebar-brand-mark" />
         <span data-tauri-drag-region>KeyNest</span>
       </div>
 

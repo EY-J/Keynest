@@ -4,7 +4,7 @@ import AuthLayout from "./AuthLayout";
 
 describe("AuthLayout", () => {
   it("renders authentication as labelled page content instead of a dialog card", () => {
-    render(
+    const { container } = render(
       <AuthLayout
         eyebrow="FIRST-TIME SETUP"
         title="Create your master password"
@@ -22,5 +22,15 @@ describe("AuthLayout", () => {
     expect(content).not.toHaveClass("auth-card");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("Authentication controls")).toBeInTheDocument();
+
+    const mark = container.querySelector(
+      ".auth-content > img.brand-mark.auth-mark",
+    );
+
+    expect(mark).toBeInTheDocument();
+    expect(mark).toHaveAttribute("alt", "");
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+    expect(mark).toHaveAttribute("draggable", "false");
+    expect(screen.queryByText("K")).not.toBeInTheDocument();
   });
 });

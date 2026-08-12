@@ -96,6 +96,18 @@ button {
   font-size: 0.80rem;
 }
 
+.brand-mark {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.titlebar-brand-mark {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
 .titlebar-window-controls {
   display: flex;
   align-self: stretch;
@@ -192,14 +204,6 @@ button {
 .logo {
   width: 44px;
   height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 13px;
-  background: #54f5ae;
-  color: #07100c;
-  font-size: 1.25rem;
-  font-weight: 900;
-  box-shadow: 0 0 25px rgba(84, 245, 174, 0.2);
 }
 
 .navigation-sidebar {
@@ -386,15 +390,7 @@ button {
 .auth-mark {
   width: 58px;
   height: 58px;
-  display: grid;
-  place-items: center;
   margin: 0 auto 28px;
-  border-radius: 17px;
-  background: #54f5ae;
-  color: #07100c;
-  font-size: 1.55rem;
-  font-weight: 900;
-  box-shadow: 0 0 34px rgba(84, 245, 174, 0.2);
 }
 
 .auth-eyebrow {
@@ -867,8 +863,6 @@ footer {
     width: 50px;
     height: 50px;
     margin-bottom: 20px;
-    border-radius: 15px;
-    font-size: 1.35rem;
   }
 
   .auth-content h1 {
@@ -931,8 +925,6 @@ footer {
     width: 46px;
     height: 46px;
     margin-bottom: 16px;
-    border-radius: 14px;
-    font-size: 1.25rem;
   }
 
   .auth-content h1 {
