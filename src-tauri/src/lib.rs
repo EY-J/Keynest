@@ -89,6 +89,55 @@ impl From<LockError> for PublicAuthError {
     }
 }
 
+fn create_master_password_and_arm(
+    password: &str,
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+) -> Result<AuthStatus, AuthError> {
+    auth.create_master_password(password)?;
+    auto_lock.arm();
+    Ok(auth.status())
+}
+
+fn unlock_and_arm(
+    password: &str,
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+) -> Result<AuthStatus, AuthError> {
+    auth.unlock(password)?;
+    auto_lock.arm();
+    Ok(auth.status())
+}
+
+fn record_activity_if_unlocked(
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+) -> Result<(), AuthError> {
+    if auth.status() != AuthStatus::Unlocked {
+        return Err(AuthError::Unauthorized);
+    }
+    auto_lock.record_activity();
+    Ok(())
+}
+
+fn reset_and_disarm(
+    confirmation: &str,
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+) -> Result<AuthStatus, AuthError> {
+    auth.reset_keynest(confirmation)?;
+    auto_lock.disarm();
+    Ok(auth.status())
+}
+
+fn resume_lock(auto_lock: &AutoLockService) {
+    let _ = auto_lock.lock_now();
+}
+
+fn shutdown_auto_lock(auto_lock: &AutoLockService) {
+    auto_lock.shutdown();
+}
+
 #[tauri::command]
 fn get_auth_status(auth: State<'_, AuthService>) -> AuthStatus {
     auth.status()
@@ -103,14 +152,9 @@ async fn create_master_password(
     let service = auth.inner().clone();
     let auto_lock = auto_lock.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = service.create_master_password(&password);
+        let result = create_master_password_and_arm(&password, &service, &auto_lock);
         password.zeroize();
-        result
-            .map(|()| {
-                auto_lock.arm();
-                service.status()
-            })
-            .map_err(Into::into)
+        result.map_err(Into::into)
     })
     .await
     .map_err(|_| PublicAuthError::internal())?
@@ -125,14 +169,9 @@ async fn unlock(
     let service = auth.inner().clone();
     let auto_lock = auto_lock.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = service.unlock(&password);
+        let result = unlock_and_arm(&password, &service, &auto_lock);
         password.zeroize();
-        result
-            .map(|()| {
-                auto_lock.arm();
-                service.status()
-            })
-            .map_err(Into::into)
+        result.map_err(Into::into)
     })
     .await
     .map_err(|_| PublicAuthError::internal())?
@@ -165,11 +204,7 @@ fn record_activity(
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
 ) -> Result<(), PublicAuthError> {
-    if auth.status() != AuthStatus::Unlocked {
-        return Err(AuthError::Unauthorized.into());
-    }
-    auto_lock.record_activity();
-    Ok(())
+    record_activity_if_unlocked(auth.inner(), auto_lock.inner()).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -178,12 +213,7 @@ fn reset_keynest(
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
 ) -> Result<AuthStatus, PublicAuthError> {
-    auth.reset_keynest(&confirmation)
-        .map(|()| {
-            auto_lock.disarm();
-            auth.status()
-        })
-        .map_err(Into::into)
+    reset_and_disarm(&confirmation, auth.inner(), auto_lock.inner()).map_err(Into::into)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -231,9 +261,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| match event {
             tauri::RunEvent::Resumed => {
-                let _ = app.state::<AutoLockService>().lock_now();
+                resume_lock(app.state::<AutoLockService>().inner());
             }
             tauri::RunEvent::ExitRequested { api, code, .. } => {
+                shutdown_auto_lock(app.state::<AutoLockService>().inner());
                 let clipboard = app.state::<ClipboardService>();
                 if clipboard.begin_process_exit_cleanup() {
                     api.prevent_exit();
@@ -243,16 +274,137 @@ pub fn run() {
                         clipboard.start_process_exit_cleanup(Duration::from_millis(250), finish);
                 }
             }
+            tauri::RunEvent::Exit => {
+                shutdown_auto_lock(app.state::<AutoLockService>().inner());
+            }
             _ => {}
         });
 }
 
 #[cfg(test)]
 mod command_tests {
-    use super::{
-        security::{AuthError, AuthStatus},
-        PublicAuthError,
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Condvar, Mutex,
+        },
+        thread,
+        time::{Duration, Instant},
     };
+
+    use tempfile::{tempdir, TempDir};
+
+    use super::{
+        create_master_password_and_arm, record_activity_if_unlocked, reset_and_disarm, resume_lock,
+        unlock_and_arm, AuthError, AuthService, AuthStatus, AutoLockService, KdfParams, LockError,
+        ProfileStore, PublicAuthError,
+    };
+    use crate::security::{CryptoError, EntropySource, LockActions};
+
+    const PASSWORD: &str = "a secure master password";
+
+    struct FixedEntropy;
+
+    impl EntropySource for FixedEntropy {
+        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = index as u8;
+            }
+            Ok(())
+        }
+    }
+
+    struct CommandFixture {
+        temp: TempDir,
+        auth: AuthService,
+        auto_lock: AutoLockService,
+    }
+
+    struct AuthLockActions {
+        auth: AuthService,
+        calls: AtomicUsize,
+    }
+
+    impl LockActions for AuthLockActions {
+        fn status(&self) -> AuthStatus {
+            self.auth.status()
+        }
+
+        fn lock(&self) -> Result<AuthStatus, LockError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.auth.lock().status)
+        }
+    }
+
+    impl CommandFixture {
+        fn new() -> Self {
+            let temp = tempdir().unwrap();
+            let params = KdfParams::testing();
+            let auth = AuthService::load(
+                ProfileStore::new(temp.path().to_path_buf(), params),
+                params,
+                Arc::new(FixedEntropy),
+            );
+            let actions = Arc::new(AuthLockActions {
+                auth: auth.clone(),
+                calls: AtomicUsize::new(0),
+            });
+            let auto_lock = AutoLockService::new_for_test(actions, Duration::from_secs(300));
+            Self {
+                temp,
+                auth,
+                auto_lock,
+            }
+        }
+    }
+
+    struct BlockingResumeActions {
+        started: (Mutex<bool>, Condvar),
+        released: (Mutex<bool>, Condvar),
+    }
+
+    impl BlockingResumeActions {
+        fn new() -> Self {
+            Self {
+                started: (Mutex::new(false), Condvar::new()),
+                released: (Mutex::new(false), Condvar::new()),
+            }
+        }
+
+        fn wait_until_started(&self) {
+            let started = self.started.0.lock().unwrap();
+            let (started, timeout) = self
+                .started
+                .1
+                .wait_timeout_while(started, Duration::from_secs(1), |started| !*started)
+                .unwrap();
+            assert!(*started && !timeout.timed_out());
+        }
+
+        fn release(&self) {
+            *self.released.0.lock().unwrap() = true;
+            self.released.1.notify_all();
+        }
+    }
+
+    impl LockActions for BlockingResumeActions {
+        fn status(&self) -> AuthStatus {
+            AuthStatus::Unlocked
+        }
+
+        fn lock(&self) -> Result<AuthStatus, LockError> {
+            *self.started.0.lock().unwrap() = true;
+            self.started.1.notify_all();
+            let released = self.released.0.lock().unwrap();
+            drop(
+                self.released
+                    .1
+                    .wait_while(released, |released| !*released)
+                    .unwrap(),
+            );
+            Ok(AuthStatus::Locked)
+        }
+    }
 
     #[test]
     fn auth_status_uses_kebab_case_ipc_values() {
@@ -321,5 +473,101 @@ mod command_tests {
 
         assert_eq!(public.code, "invalid-reset-confirmation");
         assert_eq!(public.message, "Type RESET KEYNEST exactly to confirm.");
+    }
+
+    #[test]
+    fn create_and_unlock_arm_only_after_success() {
+        let fixture = CommandFixture::new();
+        assert_eq!(
+            create_master_password_and_arm("too short", &fixture.auth, &fixture.auto_lock),
+            Err(AuthError::PasswordTooShort)
+        );
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert_eq!(
+            create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock),
+            Ok(AuthStatus::Unlocked)
+        );
+        assert!(fixture.auto_lock.is_armed_for_test());
+
+        fixture.auto_lock.lock_now().unwrap();
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert_eq!(
+            unlock_and_arm("wrong password", &fixture.auth, &fixture.auto_lock),
+            Err(AuthError::InvalidCredentials)
+        );
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert_eq!(
+            unlock_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock),
+            Ok(AuthStatus::Unlocked)
+        );
+        assert!(fixture.auto_lock.is_armed_for_test());
+    }
+
+    #[test]
+    fn reset_disarms_only_after_success_including_storage_failure() {
+        let fixture = CommandFixture::new();
+        create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock).unwrap();
+
+        assert_eq!(
+            reset_and_disarm("RESET", &fixture.auth, &fixture.auto_lock),
+            Err(AuthError::InvalidResetConfirmation)
+        );
+        assert!(fixture.auto_lock.is_armed_for_test());
+
+        std::fs::create_dir(fixture.temp.path().join("vault.enc")).unwrap();
+        assert_eq!(
+            reset_and_disarm("RESET KEYNEST", &fixture.auth, &fixture.auto_lock),
+            Err(AuthError::LocalDataFailure)
+        );
+        assert!(fixture.auto_lock.is_armed_for_test());
+
+        std::fs::remove_dir(fixture.temp.path().join("vault.enc")).unwrap();
+        assert_eq!(
+            reset_and_disarm("RESET KEYNEST", &fixture.auth, &fixture.auto_lock),
+            Ok(AuthStatus::SetupRequired)
+        );
+        assert!(!fixture.auto_lock.is_armed_for_test());
+    }
+
+    #[test]
+    fn record_activity_requires_unlocked_and_moves_only_an_authorized_deadline() {
+        let fixture = CommandFixture::new();
+        assert_eq!(
+            record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock),
+            Err(AuthError::Unauthorized)
+        );
+        assert!(!fixture.auto_lock.is_armed_for_test());
+
+        create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock).unwrap();
+        let old_activity = Instant::now() - Duration::from_secs(60);
+        fixture.auto_lock.arm_at_for_test(old_activity);
+        record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock).unwrap();
+        assert!(!fixture
+            .auto_lock
+            .expire_at_for_test(old_activity + Duration::from_secs(300)));
+
+        fixture.auto_lock.lock_now().unwrap();
+        assert_eq!(
+            record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock),
+            Err(AuthError::Unauthorized)
+        );
+        assert!(!fixture.auto_lock.is_armed_for_test());
+    }
+
+    #[test]
+    fn resume_handler_does_not_return_before_lock_action_finishes() {
+        let actions = Arc::new(BlockingResumeActions::new());
+        let auto_lock = AutoLockService::new_for_test(actions.clone(), Duration::from_secs(300));
+        let resumed_service = auto_lock.clone();
+        let (returned_tx, returned_rx) = std::sync::mpsc::channel();
+        let resumed = thread::spawn(move || {
+            resume_lock(&resumed_service);
+            returned_tx.send(()).unwrap();
+        });
+        actions.wait_until_started();
+        assert!(returned_rx.try_recv().is_err());
+        actions.release();
+        returned_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        resumed.join().unwrap();
     }
 }
