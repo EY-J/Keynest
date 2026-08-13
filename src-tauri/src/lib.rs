@@ -1,9 +1,12 @@
 mod security;
 mod settings;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use security::{AuthError, AuthService, AuthStatus, KdfParams, OsEntropy, ProfileStore};
+use security::{
+    AuthError, AuthService, AuthStatus, ClipboardService, KdfParams, OsEntropy, ProfileStore,
+    TauriClipboardPort,
+};
 use serde::Serialize;
 use settings::{SettingsService, SettingsStore};
 use tauri::{Manager, State};
@@ -150,11 +153,19 @@ fn reset_keynest(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let settings_store = SettingsStore::new(app_data_dir.clone());
-            app.manage(SettingsService::load(settings_store)?);
+            let settings = SettingsService::load(settings_store)?;
+            let clipboard_timeout =
+                Duration::from_secs(settings.snapshot(false).clipboard_clear_seconds);
+            app.manage(settings);
+            app.manage(ClipboardService::new(
+                Arc::new(TauriClipboardPort::new(app.handle().clone())),
+                clipboard_timeout,
+            ));
             let kdf_params = KdfParams::production();
             let store = ProfileStore::new(app_data_dir, kdf_params);
             app.manage(AuthService::load(store, kdf_params, Arc::new(OsEntropy)));
@@ -168,8 +179,14 @@ pub fn run() {
             lock,
             reset_keynest
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                app.state::<ClipboardService>()
+                    .clear_on_process_exit_best_effort();
+            }
+        });
 }
 
 #[cfg(test)]
