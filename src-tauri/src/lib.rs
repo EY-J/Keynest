@@ -182,9 +182,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-                app.state::<ClipboardService>()
-                    .clear_on_process_exit_best_effort();
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                let clipboard = app.state::<ClipboardService>();
+                if clipboard.begin_process_exit_cleanup() {
+                    api.prevent_exit();
+                    let app = app.clone();
+                    let finish = Arc::new(move || app.exit(code.unwrap_or(0)));
+                    let _ =
+                        clipboard.start_process_exit_cleanup(Duration::from_millis(250), finish);
+                }
             }
         });
 }

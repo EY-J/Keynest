@@ -1,5 +1,8 @@
 use std::{
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::Duration,
 };
 
@@ -18,6 +21,44 @@ pub(crate) trait ClipboardPort: Send + Sync {
     fn write_text(&self, value: &str) -> Result<(), ClipboardError>;
     fn read_text(&self) -> Result<String, ClipboardError>;
     fn clear(&self) -> Result<(), ClipboardError>;
+
+    fn clear_if_matches(&self, expected: &str) -> Result<ClearOutcome, ClipboardError> {
+        let current = Zeroizing::new(self.read_text()?);
+        if current.as_str() != expected {
+            return Ok(ClearOutcome::Changed);
+        }
+        self.clear()?;
+        Ok(ClearOutcome::Cleared)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClearOutcome {
+    Cleared,
+    Changed,
+}
+
+type ScheduledJob = Box<dyn FnOnce() + Send + 'static>;
+
+pub(crate) trait JobScheduler: Send + Sync {
+    fn schedule(&self, delay: Duration, job: ScheduledJob) -> Result<(), ClipboardError>;
+}
+
+struct ThreadJobScheduler;
+
+impl JobScheduler for ThreadJobScheduler {
+    fn schedule(&self, delay: Duration, job: ScheduledJob) -> Result<(), ClipboardError> {
+        std::thread::Builder::new()
+            .name("keynest-clipboard".to_owned())
+            .spawn(move || {
+                if !delay.is_zero() {
+                    std::thread::sleep(delay);
+                }
+                job();
+            })
+            .map(|_| ())
+            .map_err(|_| ClipboardError::SchedulingFailed)
+    }
 }
 
 #[derive(Clone)]
@@ -25,6 +66,8 @@ pub(crate) struct ClipboardService {
     inner: Arc<Mutex<ClipboardState>>,
     port: Arc<dyn ClipboardPort>,
     port_gate: Arc<Mutex<()>>,
+    scheduler: Arc<dyn JobScheduler>,
+    process_exit_started: Arc<AtomicBool>,
 }
 
 struct ClipboardState {
@@ -45,6 +88,14 @@ struct CopyPlan {
 
 impl ClipboardService {
     pub(crate) fn new(port: Arc<dyn ClipboardPort>, timeout: Duration) -> Self {
+        Self::new_with_scheduler(port, timeout, Arc::new(ThreadJobScheduler))
+    }
+
+    fn new_with_scheduler(
+        port: Arc<dyn ClipboardPort>,
+        timeout: Duration,
+        scheduler: Arc<dyn JobScheduler>,
+    ) -> Self {
         debug_assert!(ALLOWED_TIMEOUTS.contains(&timeout));
         Self {
             inner: Arc::new(Mutex::new(ClipboardState {
@@ -54,19 +105,28 @@ impl ClipboardService {
             })),
             port,
             port_gate: Arc::new(Mutex::new(())),
+            scheduler,
+            process_exit_started: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(crate) fn copy_secret(&self, value: &str) -> Result<(), ClipboardError> {
         let plan = self.claim_secret(value)?;
         let service = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(plan.timeout);
-            // Expiry errors are deliberately ignored here: they contain no clipboard data,
-            // and a failed read must never turn into a blind clear.
-            let _ = service.expire_generation(plan.generation);
-        });
-        Ok(())
+        match self.scheduler.schedule(
+            plan.timeout,
+            Box::new(move || {
+                // Expiry errors are deliberately ignored here: they contain no clipboard data,
+                // and a failed read must never turn into a blind clear.
+                let _ = service.expire_generation(plan.generation);
+            }),
+        ) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                let _ = self.expire_generation(plan.generation);
+                Err(ClipboardError::SchedulingFailed)
+            }
+        }
     }
 
     pub(crate) fn set_timeout(&self, timeout: Duration) -> Result<(), ClipboardError> {
@@ -83,28 +143,68 @@ impl ClipboardService {
         self.clear_owned_value(owned)
     }
 
-    pub(crate) fn clear_on_process_exit_best_effort(&self) {
+    pub(crate) fn begin_process_exit_cleanup(&self) -> bool {
+        self.process_exit_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub(crate) fn start_process_exit_cleanup(
+        &self,
+        deadline: Duration,
+        finish: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), ClipboardError> {
+        let completed = Arc::new(AtomicBool::new(false));
+        let deadline_completed = completed.clone();
+        let deadline_finish = finish.clone();
+        if self
+            .scheduler
+            .schedule(
+                deadline,
+                Box::new(move || complete_once(&deadline_completed, &deadline_finish)),
+            )
+            .is_err()
+        {
+            complete_once(&completed, &finish);
+            return Err(ClipboardError::SchedulingFailed);
+        }
+
         let service = self.clone();
-        let _ = std::thread::spawn(move || service.clear_if_owned()).join();
+        let cleanup_completed = completed.clone();
+        let cleanup_finish = finish.clone();
+        if self
+            .scheduler
+            .schedule(
+                Duration::ZERO,
+                Box::new(move || {
+                    let _ = service.clear_if_owned();
+                    complete_once(&cleanup_completed, &cleanup_finish);
+                }),
+            )
+            .is_err()
+        {
+            complete_once(&completed, &finish);
+            return Err(ClipboardError::SchedulingFailed);
+        }
+        Ok(())
     }
 
     fn claim_secret(&self, value: &str) -> Result<CopyPlan, ClipboardError> {
         let _port_guard = self.lock_port_gate();
+        let (generation, timeout) = {
+            let mut state = self.lock_state();
+            let generation = state.next_generation;
+            let Some(next) = generation.checked_add(1) else {
+                return Err(ClipboardError::GenerationExhausted);
+            };
+            state.next_generation = next;
+            (generation, state.timeout)
+        };
+
         // Clipboard callbacks may block or re-enter the service, so no service lock is held here.
         self.port.write_text(value)?;
 
         let mut state = self.lock_state();
-        let generation = state.next_generation;
-        state.next_generation = match generation.checked_add(1) {
-            Some(next) => next,
-            None => {
-                state.owned = None;
-                drop(state);
-                self.discard_unowned_write(value);
-                return Err(ClipboardError::GenerationExhausted);
-            }
-        };
-        let timeout = state.timeout;
         state.owned = Some(OwnedClipboard {
             generation,
             value: Zeroizing::new(value.to_owned()),
@@ -113,17 +213,6 @@ impl ClipboardService {
             generation,
             timeout,
         })
-    }
-
-    fn discard_unowned_write(&self, value: &str) {
-        if self
-            .port
-            .read_text()
-            .map(Zeroizing::new)
-            .is_ok_and(|current| current.as_str() == value)
-        {
-            let _ = self.port.clear();
-        }
     }
 
     fn expire_generation(&self, generation: u64) -> Result<(), ClipboardError> {
@@ -143,10 +232,7 @@ impl ClipboardService {
             return Ok(());
         };
 
-        let current = Zeroizing::new(self.port.read_text()?);
-        if current.as_str() == owned.value.as_str() {
-            self.port.clear()?;
-        }
+        self.port.clear_if_matches(owned.value.as_str())?;
         Ok(())
     }
 
@@ -183,6 +269,15 @@ impl ClipboardService {
     }
 }
 
+fn complete_once(completed: &AtomicBool, finish: &Arc<dyn Fn() + Send + Sync>) {
+    if completed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        finish();
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum ClipboardError {
     #[error("clipboard write failed")]
@@ -195,6 +290,8 @@ pub(crate) enum ClipboardError {
     InvalidTimeout,
     #[error("clipboard ownership generation is exhausted")]
     GenerationExhausted,
+    #[error("clipboard cleanup scheduling failed")]
+    SchedulingFailed,
 }
 
 pub(crate) struct TauriClipboardPort {
@@ -228,15 +325,115 @@ impl ClipboardPort for TauriClipboardPort {
             .clear()
             .map_err(|_| ClipboardError::ClearFailed)
     }
+
+    #[cfg(windows)]
+    fn clear_if_matches(&self, expected: &str) -> Result<ClearOutcome, ClipboardError> {
+        windows_compare_and_clear(expected)
+    }
+}
+
+#[cfg(windows)]
+fn windows_compare_and_clear(expected: &str) -> Result<ClearOutcome, ClipboardError> {
+    use std::{ptr, slice};
+    use windows_sys::Win32::System::{
+        DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard},
+        Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+    };
+
+    const CF_UNICODETEXT: u32 = 13;
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+
+    unsafe {
+        if OpenClipboard(ptr::null_mut()) == 0 {
+            return Err(ClipboardError::ReadFailed);
+        }
+        let _guard = ClipboardGuard;
+        let handle = GetClipboardData(CF_UNICODETEXT);
+        if handle.is_null() {
+            return Ok(ClearOutcome::Changed);
+        }
+        let size = GlobalSize(handle);
+        let pointer = GlobalLock(handle).cast::<u16>();
+        if pointer.is_null() || size < size_of::<u16>() {
+            return Err(ClipboardError::ReadFailed);
+        }
+        let units = slice::from_raw_parts(pointer, size / size_of::<u16>());
+        let length = units
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(units.len());
+        let matches = units[..length].iter().copied().eq(expected.encode_utf16());
+        GlobalUnlock(handle);
+        if !matches {
+            return Ok(ClearOutcome::Changed);
+        }
+        if EmptyClipboard() == 0 {
+            return Err(ClipboardError::ClearFailed);
+        }
+        Ok(ClearOutcome::Cleared)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{
-        sync::{Arc, Mutex},
+        sync::{mpsc, Arc, Condvar, Mutex},
         time::Duration,
     };
+
+    type ScheduledJob = (Duration, Box<dyn FnOnce() + Send>);
+
+    #[derive(Default)]
+    struct FakeScheduler {
+        jobs: Mutex<Vec<ScheduledJob>>,
+        fail: Mutex<bool>,
+    }
+
+    impl FakeScheduler {
+        fn failing() -> Self {
+            Self {
+                jobs: Mutex::new(Vec::new()),
+                fail: Mutex::new(true),
+            }
+        }
+
+        fn run_next(&self) {
+            let (_, job) = self.jobs.lock().unwrap().remove(0);
+            job();
+        }
+
+        fn delays(&self) -> Vec<Duration> {
+            self.jobs
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(delay, _)| *delay)
+                .collect()
+        }
+    }
+
+    impl JobScheduler for FakeScheduler {
+        fn schedule(
+            &self,
+            delay: Duration,
+            job: Box<dyn FnOnce() + Send>,
+        ) -> Result<(), ClipboardError> {
+            if *self.fail.lock().unwrap() {
+                return Err(ClipboardError::SchedulingFailed);
+            }
+            self.jobs.lock().unwrap().push((delay, job));
+            Ok(())
+        }
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Failure {
@@ -251,6 +448,8 @@ mod tests {
         failure: Mutex<Option<Failure>>,
         callback: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
         clears: Mutex<usize>,
+        external_write_during_compare: Mutex<Option<String>>,
+        block_compare: (Mutex<bool>, Condvar),
     }
 
     impl FakeClipboard {
@@ -279,6 +478,19 @@ mod tests {
             if let Some(callback) = callback {
                 callback();
             }
+        }
+
+        fn attempt_external_write_during_compare(&self, value: &str) {
+            *self.external_write_during_compare.lock().unwrap() = Some(value.to_owned());
+        }
+
+        fn block_compare(&self) {
+            *self.block_compare.0.lock().unwrap() = true;
+        }
+
+        fn release_compare(&self) {
+            *self.block_compare.0.lock().unwrap() = false;
+            self.block_compare.1.notify_all();
         }
     }
 
@@ -309,10 +521,45 @@ mod tests {
             self.set_text("");
             Ok(())
         }
+
+        fn clear_if_matches(&self, expected: &str) -> Result<ClearOutcome, ClipboardError> {
+            self.invoke_callback();
+            if *self.failure.lock().unwrap() == Some(Failure::Read) {
+                return Err(ClipboardError::ReadFailed);
+            }
+            let mut blocked = self.block_compare.0.lock().unwrap();
+            while *blocked {
+                blocked = self.block_compare.1.wait(blocked).unwrap();
+            }
+            drop(blocked);
+
+            let mut text = self.text.lock().unwrap();
+            if text.as_str() != expected {
+                return Ok(ClearOutcome::Changed);
+            }
+            let pending = self.external_write_during_compare.lock().unwrap().take();
+            if *self.failure.lock().unwrap() == Some(Failure::Clear) {
+                return Err(ClipboardError::ClearFailed);
+            }
+            *self.clears.lock().unwrap() += 1;
+            text.clear();
+            drop(text);
+            if let Some(value) = pending {
+                self.set_text(&value);
+            }
+            Ok(ClearOutcome::Cleared)
+        }
     }
 
     fn service(port: Arc<FakeClipboard>) -> ClipboardService {
         ClipboardService::new(port, Duration::from_secs(30))
+    }
+
+    fn service_with_scheduler(
+        port: Arc<FakeClipboard>,
+        scheduler: Arc<dyn JobScheduler>,
+    ) -> ClipboardService {
+        ClipboardService::new_with_scheduler(port, Duration::from_secs(30), scheduler)
     }
 
     #[test]
@@ -338,6 +585,19 @@ mod tests {
 
         assert_eq!(port.text(), "newer user value");
         assert_eq!(port.clear_count(), 0);
+        assert!(!service.has_owned_value_for_test());
+    }
+
+    #[test]
+    fn external_write_attempted_between_compare_and_clear_is_preserved() {
+        let port = Arc::new(FakeClipboard::default());
+        let service = service(port.clone());
+        let generation = service.copy_secret_for_test("secret-one").unwrap();
+        port.attempt_external_write_during_compare("newer user value");
+
+        service.expire_generation_for_test(generation).unwrap();
+
+        assert_eq!(port.text(), "newer user value");
         assert!(!service.has_owned_value_for_test());
     }
 
@@ -383,21 +643,6 @@ mod tests {
     }
 
     #[test]
-    fn process_exit_best_effort_path_uses_ownership_safe_clearing() {
-        let port = Arc::new(FakeClipboard::default());
-        let service = service(port.clone());
-        service.copy_secret_for_test("secret").unwrap();
-
-        service.clear_on_process_exit_best_effort();
-        assert_eq!(port.text(), "");
-
-        service.copy_secret_for_test("another secret").unwrap();
-        port.set_text("user content");
-        service.clear_on_process_exit_best_effort();
-        assert_eq!(port.text(), "user content");
-    }
-
-    #[test]
     fn timeout_replacement_is_captured_only_by_subsequent_copies() {
         let port = Arc::new(FakeClipboard::default());
         let service = service(port);
@@ -413,6 +658,36 @@ mod tests {
             service.set_timeout(Duration::from_secs(31)),
             Err(ClipboardError::InvalidTimeout)
         ));
+    }
+
+    #[test]
+    fn production_copy_secret_schedules_and_expires_the_owned_generation() {
+        let port = Arc::new(FakeClipboard::default());
+        let scheduler = Arc::new(FakeScheduler::default());
+        let service = service_with_scheduler(port.clone(), scheduler.clone());
+
+        service.copy_secret("secret").unwrap();
+
+        assert_eq!(scheduler.delays(), vec![Duration::from_secs(30)]);
+        scheduler.run_next();
+        assert_eq!(port.text(), "");
+        assert!(!service.has_owned_value_for_test());
+    }
+
+    #[test]
+    fn scheduler_failure_rolls_back_ownership_and_returns_a_safe_error() {
+        let secret = "secret-that-must-not-escape";
+        let port = Arc::new(FakeClipboard::default());
+        let scheduler = Arc::new(FakeScheduler::failing());
+        let service = service_with_scheduler(port.clone(), scheduler);
+
+        let error = service.copy_secret(secret).unwrap_err();
+
+        assert!(matches!(error, ClipboardError::SchedulingFailed));
+        assert_eq!(port.text(), "");
+        assert!(!service.has_owned_value_for_test());
+        assert!(!error.to_string().contains(secret));
+        assert!(!format!("{error:?}").contains(secret));
     }
 
     #[test]
@@ -470,18 +745,77 @@ mod tests {
     }
 
     #[test]
-    fn generation_exhaustion_safely_discards_the_unowned_write() {
+    fn generation_exhaustion_returns_before_any_port_io_even_when_port_would_fail() {
         let port = Arc::new(FakeClipboard::default());
         let service = service(port.clone());
         service.copy_secret_for_test("prior secret").unwrap();
         service.lock_state().next_generation = u64::MAX;
+        port.fail_with(Failure::Read);
 
         assert!(matches!(
             service.copy_secret_for_test("final secret"),
             Err(ClipboardError::GenerationExhausted)
         ));
+        assert_eq!(port.text(), "prior secret");
+        assert!(service.has_owned_value_for_test());
+        port.fail_with(Failure::Clear);
+        assert!(matches!(
+            service.copy_secret_for_test("final secret"),
+            Err(ClipboardError::GenerationExhausted)
+        ));
+        assert_eq!(port.text(), "prior secret");
+    }
+
+    #[test]
+    fn process_exit_cleanup_is_non_blocking_and_bounded() {
+        let port = Arc::new(FakeClipboard::default());
+        let service = service(port.clone());
+        service.copy_secret_for_test("secret").unwrap();
+        port.block_compare();
+        let (finished_tx, finished_rx) = mpsc::channel();
+
+        assert!(service.begin_process_exit_cleanup());
+        let started = std::time::Instant::now();
+        service
+            .start_process_exit_cleanup(
+                Duration::from_millis(25),
+                Arc::new(move || {
+                    let _ = finished_tx.send(());
+                }),
+            )
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(100));
+        finished_rx
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        port.release_compare();
+    }
+
+    #[test]
+    fn process_exit_cleanup_allows_progress_and_prevents_recursive_restart() {
+        let port = Arc::new(FakeClipboard::default());
+        let service = service(port.clone());
+        service.copy_secret_for_test("secret").unwrap();
+        port.block_compare();
+        let (finished_tx, finished_rx) = mpsc::channel();
+
+        assert!(service.begin_process_exit_cleanup());
+        assert!(!service.begin_process_exit_cleanup());
+        service
+            .start_process_exit_cleanup(
+                Duration::from_secs(1),
+                Arc::new(move || {
+                    let _ = finished_tx.send(());
+                }),
+            )
+            .unwrap();
+        port.release_compare();
+
+        finished_rx
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap();
         assert_eq!(port.text(), "");
-        assert!(!service.has_owned_value_for_test());
     }
 
     #[test]
