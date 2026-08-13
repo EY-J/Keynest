@@ -4,11 +4,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{AuthStatus, LockError};
+use super::{AuthStatus, LockError, SecurityOperationGuard};
 
 pub(crate) trait LockActions: Send + Sync {
     fn status(&self) -> AuthStatus;
     fn lock(&self) -> Result<AuthStatus, LockError>;
+
+    fn lock_with_operation_guard(
+        &self,
+        _guard: &SecurityOperationGuard<'_>,
+    ) -> Result<AuthStatus, LockError> {
+        self.lock()
+    }
 }
 
 trait MonotonicClock: Send + Sync {
@@ -135,12 +142,37 @@ impl AutoLockService {
     }
 
     pub(crate) fn set_timeout(&self, timeout: Duration) -> Result<(), LockError> {
-        self.set_timeout_at(timeout, self.supervisor.clock.now())
+        self.set_timeout_at(timeout, self.supervisor.clock.now(), None)
+    }
+
+    pub(crate) fn set_timeout_with_operation_guard(
+        &self,
+        timeout: Duration,
+        guard: &SecurityOperationGuard<'_>,
+    ) -> Result<(), LockError> {
+        self.set_timeout_at(timeout, self.supervisor.clock.now(), Some(guard))
     }
 
     pub(crate) fn lock_now(&self) -> Result<AuthStatus, LockError> {
+        self.lock_now_with_optional_guard(None)
+    }
+
+    pub(crate) fn lock_now_with_operation_guard(
+        &self,
+        guard: &SecurityOperationGuard<'_>,
+    ) -> Result<AuthStatus, LockError> {
+        self.lock_now_with_optional_guard(Some(guard))
+    }
+
+    fn lock_now_with_optional_guard(
+        &self,
+        guard: Option<&SecurityOperationGuard<'_>>,
+    ) -> Result<AuthStatus, LockError> {
         self.begin_explicit_lock();
-        let result = self.supervisor.actions.lock();
+        let result = match guard {
+            Some(guard) => self.supervisor.actions.lock_with_operation_guard(guard),
+            None => self.supervisor.actions.lock(),
+        };
         self.reconcile_after_lock();
         result
     }
@@ -214,7 +246,12 @@ impl AutoLockService {
         }
     }
 
-    fn set_timeout_at(&self, timeout: Duration, now: Instant) -> Result<(), LockError> {
+    fn set_timeout_at(
+        &self,
+        timeout: Duration,
+        now: Instant,
+        guard: Option<&SecurityOperationGuard<'_>>,
+    ) -> Result<(), LockError> {
         let should_lock = {
             let (state, wake) = &*self.supervisor.shared;
             let mut state = state.lock_unpoisoned();
@@ -229,7 +266,10 @@ impl AutoLockService {
         if !should_lock {
             return Ok(());
         }
-        let result = self.supervisor.actions.lock();
+        let result = match guard {
+            Some(guard) => self.supervisor.actions.lock_with_operation_guard(guard),
+            None => self.supervisor.actions.lock(),
+        };
         self.reconcile_after_lock();
         result.map(|_| ())
     }
@@ -276,7 +316,7 @@ impl AutoLockService {
 
     #[cfg(test)]
     fn set_timeout_at_for_test(&self, timeout: Duration, now: Instant) -> Result<(), LockError> {
-        self.set_timeout_at(timeout, now)
+        self.set_timeout_at(timeout, now, None)
     }
 
     #[cfg(test)]

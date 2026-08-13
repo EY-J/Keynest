@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 
-use super::{AuthService, AuthStatus, ClipboardService};
+use super::{
+    AuthService, AuthStatus, ClipboardService, SecurityOperationGate, SecurityOperationGuard,
+};
 
 const LOCKED_EVENT: &str = "keynest://locked";
 
@@ -26,6 +28,7 @@ pub(crate) struct LockCoordinator {
     auth: AuthService,
     clipboard: ClipboardService,
     events: Arc<dyn LockEventSink>,
+    operation_gate: SecurityOperationGate,
     #[cfg(test)]
     clipboard_override: Option<Arc<dyn ClipboardCleanup>>,
 }
@@ -35,17 +38,30 @@ impl LockCoordinator {
         auth: AuthService,
         clipboard: ClipboardService,
         events: Arc<dyn LockEventSink>,
+        operation_gate: SecurityOperationGate,
     ) -> Self {
         Self {
             auth,
             clipboard,
             events,
+            operation_gate,
             #[cfg(test)]
             clipboard_override: None,
         }
     }
 
     pub(crate) fn lock_and_emit(&self) -> Result<AuthStatus, LockError> {
+        let guard = self.operation_gate.lock();
+        self.lock_and_emit_with_operation_guard(&guard)
+    }
+
+    pub(crate) fn lock_and_emit_with_operation_guard(
+        &self,
+        guard: &SecurityOperationGuard<'_>,
+    ) -> Result<AuthStatus, LockError> {
+        if !self.operation_gate.owns(guard) {
+            return Err(LockError::OperationGateMismatch);
+        }
         let outcome = self.auth.lock();
         let clipboard_result = self.clear_clipboard();
         let event_result = if outcome.transitioned {
@@ -99,6 +115,8 @@ pub(crate) enum LockError {
     ClipboardCleanupFailed,
     #[error("lock event emission failed")]
     EventEmissionFailed,
+    #[error("security operation guard does not match the lock coordinator")]
+    OperationGateMismatch,
 }
 
 impl super::auto_lock::LockActions for LockCoordinator {
@@ -108,6 +126,13 @@ impl super::auto_lock::LockActions for LockCoordinator {
 
     fn lock(&self) -> Result<AuthStatus, LockError> {
         self.lock_and_emit()
+    }
+
+    fn lock_with_operation_guard(
+        &self,
+        guard: &SecurityOperationGuard<'_>,
+    ) -> Result<AuthStatus, LockError> {
+        self.lock_and_emit_with_operation_guard(guard)
     }
 }
 
@@ -124,7 +149,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{ClipboardCleanup, LockCoordinator, LockError, LockEventSink};
+    use super::{
+        ClipboardCleanup, LockCoordinator, LockError, LockEventSink, SecurityOperationGate,
+    };
     use crate::security::{
         clipboard::{ClipboardError, ClipboardPort},
         crypto::{CryptoError, EntropySource},
@@ -227,8 +254,13 @@ mod tests {
             operations,
             ..Default::default()
         });
-        let coordinator = LockCoordinator::new(auth.clone(), clipboard, events.clone())
-            .with_clipboard_override(cleanup.clone());
+        let coordinator = LockCoordinator::new(
+            auth.clone(),
+            clipboard,
+            events.clone(),
+            SecurityOperationGate::new(),
+        )
+        .with_clipboard_override(cleanup.clone());
         (coordinator, auth, cleanup, events)
     }
 
@@ -242,6 +274,21 @@ mod tests {
         assert_eq!(auth.status(), AuthStatus::Locked);
         assert_eq!(cleanup.calls.load(Ordering::SeqCst), 2);
         assert_eq!(events.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn mismatched_operation_guard_is_rejected_before_auth_or_external_io() {
+        let (coordinator, auth, cleanup, events) = fixture(true);
+        let wrong_gate = SecurityOperationGate::new();
+        let wrong_guard = wrong_gate.lock();
+
+        assert_eq!(
+            coordinator.lock_and_emit_with_operation_guard(&wrong_guard),
+            Err(LockError::OperationGateMismatch)
+        );
+        assert_eq!(auth.status(), AuthStatus::Unlocked);
+        assert_eq!(cleanup.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(events.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -337,6 +384,10 @@ mod tests {
         assert_eq!(
             LockError::EventEmissionFailed.to_string(),
             "lock event emission failed"
+        );
+        assert_eq!(
+            LockError::OperationGateMismatch.to_string(),
+            "security operation guard does not match the lock coordinator"
         );
     }
 }

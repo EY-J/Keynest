@@ -14,7 +14,7 @@ use crate::{
     platform::startup::{StartupError, StartupService},
     security::{
         AuthError, AuthService, AuthStatus, AutoLockService, ClipboardError, ClipboardService,
-        LockError,
+        LockError, SecurityOperationGate,
     },
     settings::{SettingsError, SettingsService, SettingsSnapshot},
 };
@@ -128,7 +128,7 @@ impl From<LockError> for PublicIpcError {
     fn from(error: LockError) -> Self {
         match error {
             LockError::ClipboardCleanupFailed => Self::from(ClipboardError::ClearFailed),
-            LockError::EventEmissionFailed => Self::internal(),
+            LockError::EventEmissionFailed | LockError::OperationGateMismatch => Self::internal(),
         }
     }
 }
@@ -202,8 +202,21 @@ pub(crate) fn create_master_password_and_arm(
     password: &str,
     auth: &AuthService,
     auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<AuthStatus, AuthError> {
+    create_master_password_and_arm_with_hook(password, auth, auto_lock, operation_gate, || {})
+}
+
+fn create_master_password_and_arm_with_hook(
+    password: &str,
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
+    after_create: impl FnOnce(),
+) -> Result<AuthStatus, AuthError> {
+    let _guard = operation_gate.lock();
     auth.create_master_password(password)?;
+    after_create();
     auto_lock.arm();
     Ok(auth.status())
 }
@@ -212,7 +225,9 @@ pub(crate) fn unlock_and_arm(
     password: &str,
     auth: &AuthService,
     auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<AuthStatus, AuthError> {
+    let _guard = operation_gate.lock();
     auth.unlock(password)?;
     auto_lock.arm();
     Ok(auth.status())
@@ -221,13 +236,24 @@ pub(crate) fn unlock_and_arm(
 pub(crate) fn record_activity_if_unlocked(
     auth: &AuthService,
     auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<(), AuthError> {
+    let _guard = operation_gate.lock();
     require_unlocked(auth)?;
     auto_lock.record_activity();
     Ok(())
 }
 
 pub(crate) fn get_settings_snapshot(
+    settings: &SettingsService,
+    startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<SettingsSnapshot, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    settings_snapshot(settings, startup)
+}
+
+fn settings_snapshot(
     settings: &SettingsService,
     startup: &StartupService,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
@@ -241,11 +267,34 @@ fn set_auto_lock_value(
     settings: &SettingsService,
     auto_lock: &AutoLockService,
     startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
+    set_auto_lock_value_with_hook(
+        seconds,
+        auth,
+        settings,
+        auto_lock,
+        startup,
+        operation_gate,
+        || {},
+    )
+}
+
+fn set_auto_lock_value_with_hook(
+    seconds: u64,
+    auth: &AuthService,
+    settings: &SettingsService,
+    auto_lock: &AutoLockService,
+    startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
+    after_persist: impl FnOnce(),
+) -> Result<SettingsSnapshot, PublicIpcError> {
+    let guard = operation_gate.lock();
     require_unlocked(auth)?;
     settings.set_auto_lock_seconds(seconds)?;
-    auto_lock.set_timeout(Duration::from_secs(seconds))?;
-    get_settings_snapshot(settings, startup)
+    after_persist();
+    auto_lock.set_timeout_with_operation_guard(Duration::from_secs(seconds), &guard)?;
+    settings_snapshot(settings, startup)
 }
 
 fn set_clipboard_clear_value(
@@ -254,11 +303,34 @@ fn set_clipboard_clear_value(
     settings: &SettingsService,
     clipboard: &ClipboardService,
     startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
+    set_clipboard_clear_value_with_hook(
+        seconds,
+        auth,
+        settings,
+        clipboard,
+        startup,
+        operation_gate,
+        || {},
+    )
+}
+
+fn set_clipboard_clear_value_with_hook(
+    seconds: u64,
+    auth: &AuthService,
+    settings: &SettingsService,
+    clipboard: &ClipboardService,
+    startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
+    after_persist: impl FnOnce(),
+) -> Result<SettingsSnapshot, PublicIpcError> {
+    let _guard = operation_gate.lock();
     require_unlocked(auth)?;
     settings.set_clipboard_clear_seconds(seconds)?;
+    after_persist();
     clipboard.set_timeout(Duration::from_secs(seconds))?;
-    get_settings_snapshot(settings, startup)
+    settings_snapshot(settings, startup)
 }
 
 fn set_theme_value(
@@ -266,10 +338,12 @@ fn set_theme_value(
     auth: &AuthService,
     settings: &SettingsService,
     startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
+    let _guard = operation_gate.lock();
     require_unlocked(auth)?;
     settings.set_theme_name(theme)?;
-    get_settings_snapshot(settings, startup)
+    settings_snapshot(settings, startup)
 }
 
 fn set_startup_value(
@@ -277,7 +351,9 @@ fn set_startup_value(
     auth: &AuthService,
     settings: &SettingsService,
     startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
+    let _guard = operation_gate.lock();
     require_unlocked(auth)?;
     let actual = startup.set_enabled(enabled)?;
     Ok(settings.snapshot(actual))
@@ -286,10 +362,23 @@ fn set_startup_value(
 fn open_fixed_data_folder(
     auth: &AuthService,
     folder: &DataFolderService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
     require_unlocked(auth)?;
     folder.open()?;
     Ok(())
+}
+
+fn change_master_password_value(
+    current_password: &str,
+    new_password: &str,
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<AuthStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.change_master_password(current_password, new_password)?;
+    Ok(auth.status())
 }
 
 fn disable_startup_for_reset(startup: &StartupService) -> Result<(), PublicIpcError> {
@@ -307,8 +396,35 @@ pub(crate) fn reset_authenticated(
     clipboard: &ClipboardService,
     settings: &SettingsService,
     auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<AuthStatus, PublicIpcError> {
+    reset_authenticated_with_hook(
+        current_password,
+        confirmation,
+        auth,
+        startup,
+        clipboard,
+        settings,
+        auto_lock,
+        operation_gate,
+        || {},
+    )
+}
+
+fn reset_authenticated_with_hook(
+    current_password: &str,
+    confirmation: &str,
+    auth: &AuthService,
+    startup: &StartupService,
+    clipboard: &ClipboardService,
+    settings: &SettingsService,
+    auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
+    after_validation: impl FnOnce(),
+) -> Result<AuthStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
     auth.validate_authenticated_reset(current_password, confirmation)?;
+    after_validation();
     disable_startup_for_reset(startup)?;
     clipboard.clear_if_owned()?;
     settings.reset()?;
@@ -324,13 +440,38 @@ fn reset_recovery(
     clipboard: &ClipboardService,
     settings: &SettingsService,
     auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
 ) -> Result<AuthStatus, PublicIpcError> {
+    reset_recovery_with_hook(
+        confirmation,
+        auth,
+        startup,
+        clipboard,
+        settings,
+        auto_lock,
+        operation_gate,
+        || {},
+    )
+}
+
+fn reset_recovery_with_hook(
+    confirmation: &str,
+    auth: &AuthService,
+    startup: &StartupService,
+    clipboard: &ClipboardService,
+    settings: &SettingsService,
+    auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
+    after_validation: impl FnOnce(),
+) -> Result<AuthStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
     match auth.status() {
         AuthStatus::Unlocked => return Err(AuthError::Unauthorized.into()),
         AuthStatus::SetupRequired => return Err(AuthError::NotInitialized.into()),
         AuthStatus::Locked | AuthStatus::DataError => {}
     }
     auth.validate_reset_confirmation(confirmation)?;
+    after_validation();
     disable_startup_for_reset(startup)?;
     clipboard.clear_if_owned()?;
     settings.reset()?;
@@ -349,11 +490,13 @@ pub(crate) async fn create_master_password(
     mut password: String,
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
     let auth = auth.inner().clone();
     let auto_lock = auto_lock.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = create_master_password_and_arm(&password, &auth, &auto_lock);
+        let result = create_master_password_and_arm(&password, &auth, &auto_lock, &operation_gate);
         password.zeroize();
         result.map_err(Into::into)
     })
@@ -366,11 +509,13 @@ pub(crate) async fn unlock(
     mut password: String,
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
     let auth = auth.inner().clone();
     let auto_lock = auto_lock.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = unlock_and_arm(&password, &auth, &auto_lock);
+        let result = unlock_and_arm(&password, &auth, &auto_lock, &operation_gate);
         password.zeroize();
         result.map_err(Into::into)
     })
@@ -381,23 +526,34 @@ pub(crate) async fn unlock(
 #[tauri::command]
 pub(crate) async fn lock(
     auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
     let auto_lock = auto_lock.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || auto_lock.lock_now().map_err(Into::into))
-        .await
-        .map_err(|_| PublicIpcError::internal())?
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = operation_gate.lock();
+        auto_lock
+            .lock_now_with_operation_guard(&guard)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
 }
 
 #[tauri::command]
 pub(crate) async fn get_settings(
     settings: State<'_, SettingsService>,
     startup: State<'_, StartupService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
     let settings = settings.inner().clone();
     let startup = startup.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || get_settings_snapshot(&settings, &startup))
-        .await
-        .map_err(|_| PublicIpcError::internal())?
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        get_settings_snapshot(&settings, &startup, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -407,13 +563,22 @@ pub(crate) async fn set_auto_lock_seconds(
     settings: State<'_, SettingsService>,
     auto_lock: State<'_, AutoLockService>,
     startup: State<'_, StartupService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
     let auth = auth.inner().clone();
     let settings = settings.inner().clone();
     let auto_lock = auto_lock.inner().clone();
     let startup = startup.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        set_auto_lock_value(seconds, &auth, &settings, &auto_lock, &startup)
+        set_auto_lock_value(
+            seconds,
+            &auth,
+            &settings,
+            &auto_lock,
+            &startup,
+            &operation_gate,
+        )
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -426,13 +591,22 @@ pub(crate) async fn set_clipboard_clear_seconds(
     settings: State<'_, SettingsService>,
     clipboard: State<'_, ClipboardService>,
     startup: State<'_, StartupService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
     let auth = auth.inner().clone();
     let settings = settings.inner().clone();
     let clipboard = clipboard.inner().clone();
     let startup = startup.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        set_clipboard_clear_value(seconds, &auth, &settings, &clipboard, &startup)
+        set_clipboard_clear_value(
+            seconds,
+            &auth,
+            &settings,
+            &clipboard,
+            &startup,
+            &operation_gate,
+        )
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -444,12 +618,14 @@ pub(crate) async fn set_theme(
     auth: State<'_, AuthService>,
     settings: State<'_, SettingsService>,
     startup: State<'_, StartupService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
     let auth = auth.inner().clone();
     let settings = settings.inner().clone();
     let startup = startup.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        set_theme_value(&theme, &auth, &settings, &startup)
+        set_theme_value(&theme, &auth, &settings, &startup, &operation_gate)
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -461,12 +637,14 @@ pub(crate) async fn set_launch_at_startup(
     auth: State<'_, AuthService>,
     settings: State<'_, SettingsService>,
     startup: State<'_, StartupService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<SettingsSnapshot, PublicIpcError> {
     let auth = auth.inner().clone();
     let settings = settings.inner().clone();
     let startup = startup.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        set_startup_value(enabled, &auth, &settings, &startup)
+        set_startup_value(enabled, &auth, &settings, &startup, &operation_gate)
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -476,8 +654,10 @@ pub(crate) async fn set_launch_at_startup(
 pub(crate) fn record_activity(
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<(), PublicIpcError> {
-    record_activity_if_unlocked(auth.inner(), auto_lock.inner()).map_err(Into::into)
+    record_activity_if_unlocked(auth.inner(), auto_lock.inner(), operation_gate.inner())
+        .map_err(Into::into)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -485,13 +665,16 @@ pub(crate) async fn change_master_password(
     mut current_password: String,
     mut new_password: String,
     auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
     let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = auth.change_master_password(&current_password, &new_password);
+        let result =
+            change_master_password_value(&current_password, &new_password, &auth, &operation_gate);
         current_password.zeroize();
         new_password.zeroize();
-        result.map(|()| auth.status()).map_err(Into::into)
+        result
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -505,12 +688,14 @@ pub(crate) async fn reset_keynest(
     clipboard: State<'_, ClipboardService>,
     settings: State<'_, SettingsService>,
     auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
     let auth = auth.inner().clone();
     let startup = startup.inner().clone();
     let clipboard = clipboard.inner().clone();
     let settings = settings.inner().clone();
     let auto_lock = auto_lock.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = reset_recovery(
             &confirmation,
@@ -519,6 +704,7 @@ pub(crate) async fn reset_keynest(
             &clipboard,
             &settings,
             &auto_lock,
+            &operation_gate,
         );
         confirmation.zeroize();
         result
@@ -536,12 +722,14 @@ pub(crate) async fn reset_keynest_authenticated(
     clipboard: State<'_, ClipboardService>,
     settings: State<'_, SettingsService>,
     auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
     let auth = auth.inner().clone();
     let startup = startup.inner().clone();
     let clipboard = clipboard.inner().clone();
     let settings = settings.inner().clone();
     let auto_lock = auto_lock.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = reset_authenticated(
             &current_password,
@@ -551,6 +739,7 @@ pub(crate) async fn reset_keynest_authenticated(
             &clipboard,
             &settings,
             &auto_lock,
+            &operation_gate,
         );
         current_password.zeroize();
         confirmation.zeroize();
@@ -564,12 +753,16 @@ pub(crate) async fn reset_keynest_authenticated(
 pub(crate) async fn open_keynest_data_folder(
     auth: State<'_, AuthService>,
     folder: State<'_, DataFolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<(), PublicIpcError> {
     let auth = auth.inner().clone();
     let folder = folder.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || open_fixed_data_folder(&auth, &folder))
-        .await
-        .map_err(|_| PublicIpcError::internal())?
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        open_fixed_data_folder(&auth, &folder, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
 }
 
 #[cfg(test)]
@@ -577,8 +770,9 @@ mod command_tests {
     use std::{
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex,
+            mpsc, Arc, Barrier, Mutex,
         },
+        thread,
         time::{Duration, Instant},
     };
 
@@ -588,7 +782,8 @@ mod command_tests {
     use crate::{
         platform::startup::StartupRegistration,
         security::{
-            ClipboardPort, CryptoError, EntropySource, KdfParams, LockActions, ProfileStore,
+            ClipboardPort, CryptoError, EntropySource, KdfParams, LockCoordinator, LockEventSink,
+            ProfileStore,
         },
         settings::{SettingsStore, ThemePreference},
     };
@@ -681,21 +876,19 @@ mod command_tests {
         }
     }
 
-    struct AuthLockActions {
-        auth: AuthService,
+    #[derive(Default)]
+    struct FakeLockEvents {
         fail: AtomicBool,
+        calls: AtomicUsize,
     }
 
-    impl LockActions for AuthLockActions {
-        fn status(&self) -> AuthStatus {
-            self.auth.status()
-        }
-
-        fn lock(&self) -> Result<AuthStatus, LockError> {
+    impl LockEventSink for FakeLockEvents {
+        fn emit_locked(&self) -> Result<(), LockError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail.load(Ordering::SeqCst) {
                 Err(LockError::EventEmissionFailed)
             } else {
-                Ok(self.auth.lock().status)
+                Ok(())
             }
         }
     }
@@ -705,12 +898,13 @@ mod command_tests {
         store: SettingsStore,
         settings: SettingsService,
         auth: AuthService,
-        actions: Arc<AuthLockActions>,
+        lock_events: Arc<FakeLockEvents>,
         auto_lock: AutoLockService,
         startup_fake: FakeStartup,
         startup: StartupService,
         clipboard_port: Arc<FakeClipboardPort>,
         clipboard: ClipboardService,
+        operation_gate: SecurityOperationGate,
     }
 
     impl CommandFixture {
@@ -722,34 +916,44 @@ mod command_tests {
                 params,
                 Arc::new(FixedEntropy),
             );
-            let actions = Arc::new(AuthLockActions {
-                auth: auth.clone(),
-                fail: AtomicBool::new(false),
-            });
-            let auto_lock =
-                AutoLockService::new_for_test(actions.clone(), Duration::from_secs(300));
             let store = SettingsStore::new(temp.path().to_path_buf());
             let settings = SettingsService::load(store.clone()).unwrap();
             let startup_fake = FakeStartup::default();
             let startup = StartupService::new(Arc::new(startup_fake.clone()));
             let clipboard_port = Arc::new(FakeClipboardPort::default());
             let clipboard = ClipboardService::new(clipboard_port.clone(), Duration::from_secs(30));
+            let operation_gate = SecurityOperationGate::new();
+            let lock_events = Arc::new(FakeLockEvents::default());
+            let coordinator = Arc::new(LockCoordinator::new(
+                auth.clone(),
+                clipboard.clone(),
+                lock_events.clone(),
+                operation_gate.clone(),
+            ));
+            let auto_lock = AutoLockService::new_for_test(coordinator, Duration::from_secs(300));
             Self {
                 temp,
                 store,
                 settings,
                 auth,
-                actions,
+                lock_events,
                 auto_lock,
                 startup_fake,
                 startup,
                 clipboard_port,
                 clipboard,
+                operation_gate,
             }
         }
 
         fn create_unlocked_profile(&self) {
-            create_master_password_and_arm(PASSWORD, &self.auth, &self.auto_lock).unwrap();
+            create_master_password_and_arm(
+                PASSWORD,
+                &self.auth,
+                &self.auto_lock,
+                &self.operation_gate,
+            )
+            .unwrap();
             self.settings.set_theme_name("dark").unwrap();
             self.clipboard.copy_secret("owned secret").unwrap();
             self.startup_fake.0.lock().unwrap().enabled = true;
@@ -768,6 +972,7 @@ mod command_tests {
                 &self.clipboard,
                 &self.settings,
                 &self.auto_lock,
+                &self.operation_gate,
             )
         }
     }
@@ -840,6 +1045,10 @@ mod command_tests {
             "internal-error"
         );
         assert_eq!(
+            PublicIpcError::from(LockError::OperationGateMismatch).code,
+            "internal-error"
+        );
+        assert_eq!(
             PublicIpcError::from(FolderError::CreateFailed).code,
             "folder-open-error"
         );
@@ -878,7 +1087,8 @@ mod command_tests {
         let fixture = CommandFixture::new();
         fixture.startup_fake.0.lock().unwrap().enabled = true;
         let value = serde_json::to_value(
-            get_settings_snapshot(&fixture.settings, &fixture.startup).unwrap(),
+            get_settings_snapshot(&fixture.settings, &fixture.startup, &fixture.operation_gate)
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(value.as_object().unwrap().len(), 4);
@@ -896,8 +1106,11 @@ mod command_tests {
         let settings =
             SettingsService::load(SettingsStore::new(temp.path().to_path_buf())).unwrap();
         let startup = StartupService::new(Arc::new(FakeStartup::default()));
-        let value =
-            serde_json::to_value(get_settings_snapshot(&settings, &startup).unwrap()).unwrap();
+        let operation_gate = SecurityOperationGate::new();
+        let value = serde_json::to_value(
+            get_settings_snapshot(&settings, &startup, &operation_gate).unwrap(),
+        )
+        .unwrap();
         assert_eq!(value["autoLockSeconds"], 300);
         assert_eq!(value["clipboardClearSeconds"], 30);
         assert!(value["warning"]
@@ -911,7 +1124,7 @@ mod command_tests {
         let fixture = CommandFixture::new();
         fixture.startup_fake.0.lock().unwrap().fail_query = true;
         assert_eq!(
-            get_settings_snapshot(&fixture.settings, &fixture.startup)
+            get_settings_snapshot(&fixture.settings, &fixture.startup, &fixture.operation_gate,)
                 .unwrap_err()
                 .code,
             "startup-error"
@@ -929,7 +1142,8 @@ mod command_tests {
                     &fixture.auth,
                     &fixture.settings,
                     &fixture.auto_lock,
-                    &fixture.startup
+                    &fixture.startup,
+                    &fixture.operation_gate,
                 )
                 .unwrap()
                 .auto_lock_seconds,
@@ -943,7 +1157,8 @@ mod command_tests {
                     &fixture.auth,
                     &fixture.settings,
                     &fixture.clipboard,
-                    &fixture.startup
+                    &fixture.startup,
+                    &fixture.operation_gate,
                 )
                 .unwrap()
                 .clipboard_clear_seconds,
@@ -956,9 +1171,15 @@ mod command_tests {
             ("light", ThemePreference::Light),
         ] {
             assert_eq!(
-                set_theme_value(name, &fixture.auth, &fixture.settings, &fixture.startup)
-                    .unwrap()
-                    .theme,
+                set_theme_value(
+                    name,
+                    &fixture.auth,
+                    &fixture.settings,
+                    &fixture.startup,
+                    &fixture.operation_gate,
+                )
+                .unwrap()
+                .theme,
                 expected
             );
         }
@@ -968,7 +1189,8 @@ mod command_tests {
                 &fixture.auth,
                 &fixture.settings,
                 &fixture.auto_lock,
-                &fixture.startup
+                &fixture.startup,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
@@ -980,16 +1202,23 @@ mod command_tests {
                 &fixture.auth,
                 &fixture.settings,
                 &fixture.clipboard,
-                &fixture.startup
+                &fixture.startup,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
             "invalid-clipboard-duration"
         );
         assert_eq!(
-            set_theme_value("never", &fixture.auth, &fixture.settings, &fixture.startup)
-                .unwrap_err()
-                .code,
+            set_theme_value(
+                "never",
+                &fixture.auth,
+                &fixture.settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
             "invalid-theme"
         );
     }
@@ -1004,7 +1233,8 @@ mod command_tests {
                 &fixture.auth,
                 &fixture.settings,
                 &fixture.auto_lock,
-                &fixture.startup
+                &fixture.startup,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
@@ -1016,22 +1246,35 @@ mod command_tests {
                 &fixture.auth,
                 &fixture.settings,
                 &fixture.clipboard,
-                &fixture.startup
+                &fixture.startup,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
             "unauthorized"
         );
         assert_eq!(
-            set_theme_value("dark", &fixture.auth, &fixture.settings, &fixture.startup)
-                .unwrap_err()
-                .code,
+            set_theme_value(
+                "dark",
+                &fixture.auth,
+                &fixture.settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
             "unauthorized"
         );
         assert_eq!(
-            set_startup_value(true, &fixture.auth, &fixture.settings, &fixture.startup)
-                .unwrap_err()
-                .code,
+            set_startup_value(
+                true,
+                &fixture.auth,
+                &fixture.settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
             "unauthorized"
         );
         assert_eq!(fixture.settings.snapshot(false), before);
@@ -1041,20 +1284,61 @@ mod command_tests {
     }
 
     #[test]
+    fn protected_mutation_waiting_behind_a_linearized_lock_has_no_side_effect() {
+        let fixture = CommandFixture::new();
+        create_master_password_and_arm(
+            PASSWORD,
+            &fixture.auth,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let guard = fixture.operation_gate.lock();
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let mutation = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            set_theme_value("dark", &auth, &settings, &startup, &operation_gate)
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        assert_eq!(
+            fixture
+                .auto_lock
+                .lock_now_with_operation_guard(&guard)
+                .unwrap(),
+            AuthStatus::Locked
+        );
+        drop(guard);
+
+        assert_eq!(mutation.join().unwrap().unwrap_err().code, "unauthorized");
+        assert_eq!(
+            fixture.settings.snapshot(false).theme,
+            ThemePreference::System
+        );
+        assert!(!fixture.temp.path().join("settings.json").exists());
+    }
+
+    #[test]
     fn persistence_precedes_runtime_application_and_runtime_failure_is_truthful() {
         let fixture = CommandFixture::new();
         fixture.auth.create_master_password(PASSWORD).unwrap();
         fixture
             .auto_lock
             .arm_at_for_test(Instant::now() - Duration::from_secs(120));
-        fixture.actions.fail.store(true, Ordering::SeqCst);
+        fixture.lock_events.fail.store(true, Ordering::SeqCst);
         assert_eq!(
             set_auto_lock_value(
                 60,
                 &fixture.auth,
                 &fixture.settings,
                 &fixture.auto_lock,
-                &fixture.startup
+                &fixture.startup,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
@@ -1068,6 +1352,172 @@ mod command_tests {
     }
 
     #[test]
+    fn concurrent_auto_lock_mutations_cannot_apply_a_stale_weaker_runtime_timeout_last() {
+        let fixture = CommandFixture::new();
+        fixture.auth.create_master_password(PASSWORD).unwrap();
+        let persisted = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let persisted_a = persisted.clone();
+        let release_a = release.clone();
+        let first = thread::spawn(move || {
+            set_auto_lock_value_with_hook(
+                1800,
+                &auth,
+                &settings,
+                &auto_lock,
+                &startup,
+                &operation_gate,
+                || {
+                    persisted_a.wait();
+                    release_a.wait();
+                },
+            )
+            .unwrap()
+        });
+        persisted.wait();
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result =
+                set_auto_lock_value(60, &auth, &settings, &auto_lock, &startup, &operation_gate);
+            returned_tx.send(()).unwrap();
+            result.unwrap()
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(returned_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+
+        release.wait();
+        assert_eq!(first.join().unwrap().auto_lock_seconds, 1800);
+        assert_eq!(second.join().unwrap().auto_lock_seconds, 60);
+        assert_eq!(fixture.settings.snapshot(false).auto_lock_seconds, 60);
+        assert_eq!(
+            fixture.auto_lock.timeout_for_test(),
+            Duration::from_secs(60)
+        );
+    }
+
+    #[test]
+    fn shorter_elapsed_timeout_reuses_matching_guard_without_deadlock_and_locks_once() {
+        let fixture = CommandFixture::new();
+        create_master_password_and_arm(
+            PASSWORD,
+            &fixture.auth,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        fixture.clipboard.copy_secret("owned secret").unwrap();
+        fixture
+            .auto_lock
+            .arm_at_for_test(Instant::now() - Duration::from_secs(120));
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let result =
+                set_auto_lock_value(60, &auth, &settings, &auto_lock, &startup, &operation_gate);
+            returned_tx.send(result).unwrap();
+        });
+
+        let snapshot = returned_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("guard-aware immediate lock must not self-deadlock")
+            .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(snapshot.auto_lock_seconds, 60);
+        assert_eq!(fixture.auth.status(), AuthStatus::Locked);
+        assert_eq!(fixture.lock_events.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.clipboard_port.clear_calls.load(Ordering::SeqCst), 1);
+        assert!(!fixture.auto_lock.is_armed_for_test());
+    }
+
+    #[test]
+    fn concurrent_clipboard_mutations_cannot_apply_a_stale_weaker_runtime_timeout_last() {
+        let fixture = CommandFixture::new();
+        fixture.auth.create_master_password(PASSWORD).unwrap();
+        let persisted = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let clipboard = fixture.clipboard.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let persisted_a = persisted.clone();
+        let release_a = release.clone();
+        let first = thread::spawn(move || {
+            set_clipboard_clear_value_with_hook(
+                60,
+                &auth,
+                &settings,
+                &clipboard,
+                &startup,
+                &operation_gate,
+                || {
+                    persisted_a.wait();
+                    release_a.wait();
+                },
+            )
+            .unwrap()
+        });
+        persisted.wait();
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let clipboard = fixture.clipboard.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = set_clipboard_clear_value(
+                10,
+                &auth,
+                &settings,
+                &clipboard,
+                &startup,
+                &operation_gate,
+            );
+            returned_tx.send(()).unwrap();
+            result.unwrap()
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(returned_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+
+        release.wait();
+        assert_eq!(first.join().unwrap().clipboard_clear_seconds, 60);
+        assert_eq!(second.join().unwrap().clipboard_clear_seconds, 10);
+        assert_eq!(fixture.settings.snapshot(false).clipboard_clear_seconds, 10);
+        assert_eq!(
+            fixture.clipboard.timeout_for_test(),
+            Duration::from_secs(10)
+        );
+    }
+
+    #[test]
     fn clipboard_runtime_timeout_and_actual_startup_snapshot_update_after_persistence() {
         let fixture = CommandFixture::new();
         fixture.auth.create_master_password(PASSWORD).unwrap();
@@ -1077,6 +1527,7 @@ mod command_tests {
             &fixture.settings,
             &fixture.clipboard,
             &fixture.startup,
+            &fixture.operation_gate,
         )
         .unwrap();
         assert_eq!(
@@ -1089,8 +1540,14 @@ mod command_tests {
             startup.enabled = true;
             startup.ignore_disable = true;
         }
-        let snapshot =
-            set_startup_value(false, &fixture.auth, &fixture.settings, &fixture.startup).unwrap();
+        let snapshot = set_startup_value(
+            false,
+            &fixture.auth,
+            &fixture.settings,
+            &fixture.startup,
+            &fixture.operation_gate,
+        )
+        .unwrap();
         assert!(snapshot.launch_at_startup);
     }
 
@@ -1100,9 +1557,15 @@ mod command_tests {
         fixture.auth.create_master_password(PASSWORD).unwrap();
         fixture.startup_fake.0.lock().unwrap().fail_enable = true;
         assert_eq!(
-            set_startup_value(true, &fixture.auth, &fixture.settings, &fixture.startup)
-                .unwrap_err()
-                .code,
+            set_startup_value(
+                true,
+                &fixture.auth,
+                &fixture.settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
             "startup-error"
         );
         let temp = tempdir().unwrap();
@@ -1110,9 +1573,15 @@ mod command_tests {
         fs::write(&blocked, b"file").unwrap();
         let settings = SettingsService::load(SettingsStore::new(blocked)).unwrap();
         assert_eq!(
-            set_theme_value("dark", &fixture.auth, &settings, &fixture.startup)
-                .unwrap_err()
-                .code,
+            set_theme_value(
+                "dark",
+                &fixture.auth,
+                &settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
             "settings-error"
         );
         assert_eq!(settings.snapshot(false).theme, ThemePreference::System);
@@ -1142,7 +1611,7 @@ mod command_tests {
         let fixed = fixture.temp.path().join("fixed").join("keynest");
         let opener = Arc::new(RecordingFolderOpener::default());
         let folder = DataFolderService::with_opener(fixed.clone(), opener.clone());
-        open_fixed_data_folder(&fixture.auth, &folder).unwrap();
+        open_fixed_data_folder(&fixture.auth, &folder, &fixture.operation_gate).unwrap();
         assert!(fixed.is_dir());
         assert_eq!(opener.paths.lock().unwrap().as_slice(), [fixed]);
     }
@@ -1154,7 +1623,7 @@ mod command_tests {
         let opener = Arc::new(RecordingFolderOpener::default());
         let folder = DataFolderService::with_opener(fixed.clone(), opener.clone());
         assert_eq!(
-            open_fixed_data_folder(&fixture.auth, &folder)
+            open_fixed_data_folder(&fixture.auth, &folder, &fixture.operation_gate)
                 .unwrap_err()
                 .code,
             "unauthorized"
@@ -1164,11 +1633,28 @@ mod command_tests {
         fixture.auth.create_master_password(PASSWORD).unwrap();
         opener.fail.store(true, Ordering::SeqCst);
         assert_eq!(
-            open_fixed_data_folder(&fixture.auth, &folder)
+            open_fixed_data_folder(&fixture.auth, &folder, &fixture.operation_gate)
                 .unwrap_err()
                 .code,
             "folder-open-error"
         );
+    }
+
+    #[test]
+    fn data_folder_creation_failure_is_safe_and_never_calls_the_opener() {
+        let fixture = CommandFixture::new();
+        fixture.auth.create_master_password(PASSWORD).unwrap();
+        let blocked_parent = fixture.temp.path().join("blocked-parent");
+        fs::write(&blocked_parent, b"regular file").unwrap();
+        let fixed = blocked_parent.join("keynest");
+        let opener = Arc::new(RecordingFolderOpener::default());
+        let folder = DataFolderService::with_opener(fixed, opener.clone());
+
+        let error =
+            open_fixed_data_folder(&fixture.auth, &folder, &fixture.operation_gate).unwrap_err();
+
+        assert_eq!(error.code, "folder-open-error");
+        assert!(opener.paths.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1305,6 +1791,220 @@ mod command_tests {
     }
 
     #[test]
+    fn authenticated_reset_is_atomic_against_all_contending_protected_operations() {
+        let fixture = CommandFixture::new();
+        fixture.create_unlocked_profile();
+        fs::write(fixture.temp.path().join("keep.txt"), b"keep").unwrap();
+        let validated = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+
+        let auth = fixture.auth.clone();
+        let startup = fixture.startup.clone();
+        let clipboard = fixture.clipboard.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let validated_reset = validated.clone();
+        let release_reset = release.clone();
+        let reset = thread::spawn(move || {
+            reset_authenticated_with_hook(
+                PASSWORD,
+                "RESET KEYNEST",
+                &auth,
+                &startup,
+                &clipboard,
+                &settings,
+                &auto_lock,
+                &operation_gate,
+                || {
+                    validated_reset.wait();
+                    release_reset.wait();
+                },
+            )
+        });
+        validated.wait();
+
+        let ready = Arc::new(Barrier::new(8));
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let ready_startup = ready.clone();
+        let startup_toggle = thread::spawn(move || {
+            ready_startup.wait();
+            set_startup_value(true, &auth, &settings, &startup, &operation_gate)
+        });
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let ready_settings = ready.clone();
+        let setting = thread::spawn(move || {
+            ready_settings.wait();
+            set_theme_value("light", &auth, &settings, &startup, &operation_gate)
+        });
+
+        let auth = fixture.auth.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let startup = fixture.startup.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let ready_timeout = ready.clone();
+        let timeout = thread::spawn(move || {
+            ready_timeout.wait();
+            set_auto_lock_value(
+                1800,
+                &auth,
+                &settings,
+                &auto_lock,
+                &startup,
+                &operation_gate,
+            )
+        });
+
+        let auth = fixture.auth.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let ready_unlock = ready.clone();
+        let unlock = thread::spawn(move || {
+            ready_unlock.wait();
+            unlock_and_arm(PASSWORD, &auth, &auto_lock, &operation_gate)
+        });
+
+        let auth = fixture.auth.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let ready_change = ready.clone();
+        let password_change = thread::spawn(move || {
+            ready_change.wait();
+            change_master_password_value(
+                PASSWORD,
+                "a replacement secure password",
+                &auth,
+                &operation_gate,
+            )
+        });
+
+        let auto_lock = fixture.auto_lock.clone();
+        let ready_manual_lock = ready.clone();
+        let manual_lock = thread::spawn(move || {
+            ready_manual_lock.wait();
+            auto_lock.lock_now()
+        });
+
+        let auto_lock = fixture.auto_lock.clone();
+        let ready_resume_lock = ready.clone();
+        let resume_lock = thread::spawn(move || {
+            ready_resume_lock.wait();
+            auto_lock.lock_now()
+        });
+
+        ready.wait();
+        release.wait();
+
+        assert_eq!(reset.join().unwrap().unwrap(), AuthStatus::SetupRequired);
+        assert_eq!(
+            startup_toggle.join().unwrap().unwrap_err().code,
+            "unauthorized"
+        );
+        assert_eq!(setting.join().unwrap().unwrap_err().code, "unauthorized");
+        assert_eq!(timeout.join().unwrap().unwrap_err().code, "unauthorized");
+        assert_eq!(unlock.join().unwrap(), Err(AuthError::NotInitialized));
+        assert_eq!(
+            password_change.join().unwrap().unwrap_err().code,
+            "not-initialized"
+        );
+        assert_eq!(
+            manual_lock.join().unwrap().unwrap(),
+            AuthStatus::SetupRequired
+        );
+        assert_eq!(
+            resume_lock.join().unwrap().unwrap(),
+            AuthStatus::SetupRequired
+        );
+
+        assert_eq!(fixture.auth.status(), AuthStatus::SetupRequired);
+        assert!(!fixture.startup_fake.0.lock().unwrap().enabled);
+        assert!(!fixture.temp.path().join("settings.json").exists());
+        let defaults = fixture.settings.snapshot(false);
+        assert_eq!(defaults.auto_lock_seconds, 300);
+        assert_eq!(defaults.clipboard_clear_seconds, 30);
+        assert_eq!(defaults.theme, ThemePreference::System);
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert_eq!(
+            fs::read(fixture.temp.path().join("keep.txt")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn create_master_password_linearizes_before_waiting_reset_and_is_fully_erased() {
+        let fixture = CommandFixture::new();
+        fixture.settings.set_theme_name("dark").unwrap();
+        fixture.startup_fake.0.lock().unwrap().enabled = true;
+        fs::write(fixture.temp.path().join("keep.txt"), b"keep").unwrap();
+        let created = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+
+        let auth = fixture.auth.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let created_call = created.clone();
+        let release_call = release.clone();
+        let create = thread::spawn(move || {
+            create_master_password_and_arm_with_hook(
+                PASSWORD,
+                &auth,
+                &auto_lock,
+                &operation_gate,
+                || {
+                    created_call.wait();
+                    release_call.wait();
+                },
+            )
+        });
+        created.wait();
+
+        let auth = fixture.auth.clone();
+        let startup = fixture.startup.clone();
+        let clipboard = fixture.clipboard.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (reset_started_tx, reset_started_rx) = mpsc::channel();
+        let reset = thread::spawn(move || {
+            reset_started_tx.send(()).unwrap();
+            reset_authenticated(
+                PASSWORD,
+                "RESET KEYNEST",
+                &auth,
+                &startup,
+                &clipboard,
+                &settings,
+                &auto_lock,
+                &operation_gate,
+            )
+        });
+        reset_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        release.wait();
+        assert_eq!(create.join().unwrap(), Ok(AuthStatus::Unlocked));
+        assert_eq!(reset.join().unwrap().unwrap(), AuthStatus::SetupRequired);
+        assert_eq!(fixture.auth.status(), AuthStatus::SetupRequired);
+        assert!(!fixture.temp.path().join("profile.json").exists());
+        assert!(!fixture.temp.path().join("settings.json").exists());
+        assert!(!fixture.startup_fake.0.lock().unwrap().enabled);
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert_eq!(
+            fs::read(fixture.temp.path().join("keep.txt")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
     fn recovery_reset_rejects_unlocked_bypass_before_side_effects() {
         let fixture = CommandFixture::new();
         fixture.create_unlocked_profile();
@@ -1315,7 +2015,8 @@ mod command_tests {
                 &fixture.startup,
                 &fixture.clipboard,
                 &fixture.settings,
-                &fixture.auto_lock
+                &fixture.auto_lock,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
@@ -1332,6 +2033,7 @@ mod command_tests {
         fixture.create_unlocked_profile();
         fixture.auto_lock.lock_now().unwrap();
         fixture.startup_fake.0.lock().unwrap().enabled = true;
+        let clears_before_reset = fixture.clipboard_port.clear_calls.load(Ordering::SeqCst);
 
         assert_eq!(
             reset_recovery(
@@ -1341,16 +2043,75 @@ mod command_tests {
                 &fixture.clipboard,
                 &fixture.settings,
                 &fixture.auto_lock,
+                &fixture.operation_gate,
             )
             .unwrap_err()
             .code,
             "invalid-reset-confirmation"
         );
         assert!(fixture.startup_fake.0.lock().unwrap().enabled);
-        assert_eq!(fixture.clipboard_port.clear_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fixture.clipboard_port.clear_calls.load(Ordering::SeqCst),
+            clears_before_reset
+        );
         assert!(fixture.temp.path().join("profile.json").is_file());
         assert!(fixture.temp.path().join("settings.json").is_file());
         assert_eq!(fixture.auth.status(), AuthStatus::Locked);
+    }
+
+    #[test]
+    fn recovery_reset_state_check_and_deletion_are_atomic_against_unlock() {
+        let fixture = CommandFixture::new();
+        fixture.create_unlocked_profile();
+        fixture.auto_lock.lock_now().unwrap();
+        fixture.startup_fake.0.lock().unwrap().enabled = true;
+        let validated = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+
+        let auth = fixture.auth.clone();
+        let startup = fixture.startup.clone();
+        let clipboard = fixture.clipboard.clone();
+        let settings = fixture.settings.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let validated_reset = validated.clone();
+        let release_reset = release.clone();
+        let reset = thread::spawn(move || {
+            reset_recovery_with_hook(
+                "RESET KEYNEST",
+                &auth,
+                &startup,
+                &clipboard,
+                &settings,
+                &auto_lock,
+                &operation_gate,
+                || {
+                    validated_reset.wait();
+                    release_reset.wait();
+                },
+            )
+        });
+        validated.wait();
+
+        let auth = fixture.auth.clone();
+        let auto_lock = fixture.auto_lock.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (unlock_started_tx, unlock_started_rx) = mpsc::channel();
+        let unlock = thread::spawn(move || {
+            unlock_started_tx.send(()).unwrap();
+            unlock_and_arm(PASSWORD, &auth, &auto_lock, &operation_gate)
+        });
+        unlock_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        release.wait();
+        assert_eq!(reset.join().unwrap().unwrap(), AuthStatus::SetupRequired);
+        assert_eq!(unlock.join().unwrap(), Err(AuthError::NotInitialized));
+        assert_eq!(fixture.auth.status(), AuthStatus::SetupRequired);
+        assert!(!fixture.temp.path().join("profile.json").exists());
+        assert!(!fixture.temp.path().join("settings.json").exists());
+        assert!(!fixture.auto_lock.is_armed_for_test());
     }
 
     #[test]
@@ -1366,7 +2127,8 @@ mod command_tests {
                 &fixture.startup,
                 &fixture.clipboard,
                 &fixture.settings,
-                &fixture.auto_lock
+                &fixture.auto_lock,
+                &fixture.operation_gate,
             )
             .unwrap(),
             AuthStatus::SetupRequired
@@ -1380,27 +2142,43 @@ mod command_tests {
     fn create_unlock_activity_and_manual_lock_behavior_is_preserved() {
         let fixture = CommandFixture::new();
         assert_eq!(
-            create_master_password_and_arm("short", &fixture.auth, &fixture.auto_lock),
+            create_master_password_and_arm(
+                "short",
+                &fixture.auth,
+                &fixture.auto_lock,
+                &fixture.operation_gate,
+            ),
             Err(AuthError::PasswordTooShort)
         );
         assert!(!fixture.auto_lock.is_armed_for_test());
         assert_eq!(
-            create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock),
+            create_master_password_and_arm(
+                PASSWORD,
+                &fixture.auth,
+                &fixture.auto_lock,
+                &fixture.operation_gate,
+            ),
             Ok(AuthStatus::Unlocked)
         );
         let old = Instant::now() - Duration::from_secs(30);
         fixture.auto_lock.arm_at_for_test(old);
-        record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock).unwrap();
+        record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock, &fixture.operation_gate)
+            .unwrap();
         assert!(!fixture
             .auto_lock
             .expire_at_for_test(old + Duration::from_secs(300)));
         assert_eq!(fixture.auto_lock.lock_now().unwrap(), AuthStatus::Locked);
         assert_eq!(
-            record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock),
+            record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock, &fixture.operation_gate,),
             Err(AuthError::Unauthorized)
         );
         assert_eq!(
-            unlock_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock),
+            unlock_and_arm(
+                PASSWORD,
+                &fixture.auth,
+                &fixture.auto_lock,
+                &fixture.operation_gate,
+            ),
             Ok(AuthStatus::Unlocked)
         );
     }

@@ -11,7 +11,7 @@ use platform::startup::{
 };
 use security::{
     AuthService, AutoLockService, ClipboardService, KdfParams, LockCoordinator, OsEntropy,
-    ProfileStore, TauriClipboardPort, TauriLockEventSink,
+    ProfileStore, SecurityOperationGate, TauriClipboardPort, TauriLockEventSink,
 };
 use settings::{SettingsService, SettingsStore};
 use tauri::Manager;
@@ -38,6 +38,8 @@ pub fn run() {
             minimize_for_launch(std::env::args_os(), &TauriMainWindowMinimizer::new(app))?;
 
             let app_data_dir = app.path().app_data_dir()?;
+            let operation_gate = SecurityOperationGate::new();
+            app.manage(operation_gate.clone());
             app.manage(DataFolderService::new(app_data_dir.clone()));
             app.manage(StartupService::new(Arc::new(
                 TauriStartupRegistration::new(app.handle().clone()),
@@ -63,6 +65,7 @@ pub fn run() {
                 auth,
                 clipboard,
                 Arc::new(TauriLockEventSink::new(app.handle().clone())),
+                operation_gate,
             );
             app.manage(coordinator.clone());
             app.manage(AutoLockService::new(
