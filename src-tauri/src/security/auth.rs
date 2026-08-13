@@ -26,6 +26,12 @@ pub(crate) enum AuthStatus {
     DataError,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LockOutcome {
+    pub status: AuthStatus,
+    pub transitioned: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct AuthService {
     inner: Arc<Mutex<AuthInner>>,
@@ -151,18 +157,23 @@ impl AuthService {
         }
     }
 
-    pub(crate) fn lock(&self) -> AuthStatus {
+    pub(crate) fn lock(&self) -> LockOutcome {
         let mut inner = self.lock_inner();
         let previous = std::mem::replace(&mut inner.state, AuthState::DataError);
+        let transitioned = matches!(&previous, AuthState::Unlocked { .. });
         inner.state = match previous {
             AuthState::Unlocked { profile, .. } => AuthState::Locked(profile),
             other => other,
         };
-        match inner.state {
+        let status = match inner.state {
             AuthState::SetupRequired => AuthStatus::SetupRequired,
             AuthState::Locked(_) => AuthStatus::Locked,
             AuthState::Unlocked { .. } => AuthStatus::Unlocked,
             AuthState::DataError => AuthStatus::DataError,
+        };
+        LockOutcome {
+            status,
+            transitioned,
         }
     }
 
@@ -442,6 +453,37 @@ mod tests {
 
         fixture.service.unlock("a secure master password").unwrap();
         assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+    }
+
+    #[test]
+    fn lock_outcome_is_true_only_for_the_unlocked_to_locked_transition() {
+        let fixture = AuthFixture::new();
+        assert_eq!(
+            fixture.service.lock(),
+            LockOutcome {
+                status: AuthStatus::SetupRequired,
+                transitioned: false,
+            }
+        );
+        fixture
+            .service
+            .create_master_password("a secure master password")
+            .unwrap();
+
+        assert_eq!(
+            fixture.service.lock(),
+            LockOutcome {
+                status: AuthStatus::Locked,
+                transitioned: true,
+            }
+        );
+        assert_eq!(
+            fixture.service.lock(),
+            LockOutcome {
+                status: AuthStatus::Locked,
+                transitioned: false,
+            }
+        );
     }
 
     #[test]

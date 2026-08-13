@@ -4,8 +4,8 @@ mod settings;
 use std::{sync::Arc, time::Duration};
 
 use security::{
-    AuthError, AuthService, AuthStatus, ClipboardService, KdfParams, OsEntropy, ProfileStore,
-    TauriClipboardPort,
+    AuthError, AuthService, AuthStatus, AutoLockService, ClipboardService, KdfParams,
+    LockCoordinator, LockError, OsEntropy, ProfileStore, TauriClipboardPort, TauriLockEventSink,
 };
 use serde::Serialize;
 use settings::{SettingsService, SettingsStore};
@@ -83,6 +83,12 @@ impl From<AuthError> for PublicAuthError {
     }
 }
 
+impl From<LockError> for PublicAuthError {
+    fn from(_: LockError) -> Self {
+        Self::internal()
+    }
+}
+
 #[tauri::command]
 fn get_auth_status(auth: State<'_, AuthService>) -> AuthStatus {
     auth.status()
@@ -92,12 +98,19 @@ fn get_auth_status(auth: State<'_, AuthService>) -> AuthStatus {
 async fn create_master_password(
     mut password: String,
     auth: State<'_, AuthService>,
+    auto_lock: State<'_, AutoLockService>,
 ) -> Result<AuthStatus, PublicAuthError> {
     let service = auth.inner().clone();
+    let auto_lock = auto_lock.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = service.create_master_password(&password);
         password.zeroize();
-        result.map(|()| service.status()).map_err(Into::into)
+        result
+            .map(|()| {
+                auto_lock.arm();
+                service.status()
+            })
+            .map_err(Into::into)
     })
     .await
     .map_err(|_| PublicAuthError::internal())?
@@ -107,12 +120,19 @@ async fn create_master_password(
 async fn unlock(
     mut password: String,
     auth: State<'_, AuthService>,
+    auto_lock: State<'_, AutoLockService>,
 ) -> Result<AuthStatus, PublicAuthError> {
     let service = auth.inner().clone();
+    let auto_lock = auto_lock.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = service.unlock(&password);
         password.zeroize();
-        result.map(|()| service.status()).map_err(Into::into)
+        result
+            .map(|()| {
+                auto_lock.arm();
+                service.status()
+            })
+            .map_err(Into::into)
     })
     .await
     .map_err(|_| PublicAuthError::internal())?
@@ -136,17 +156,33 @@ async fn change_master_password(
 }
 
 #[tauri::command]
-fn lock(auth: State<'_, AuthService>) -> AuthStatus {
-    auth.lock()
+fn lock(auto_lock: State<'_, AutoLockService>) -> Result<AuthStatus, PublicAuthError> {
+    auto_lock.lock_now().map_err(Into::into)
+}
+
+#[tauri::command]
+fn record_activity(
+    auth: State<'_, AuthService>,
+    auto_lock: State<'_, AutoLockService>,
+) -> Result<(), PublicAuthError> {
+    if auth.status() != AuthStatus::Unlocked {
+        return Err(AuthError::Unauthorized.into());
+    }
+    auto_lock.record_activity();
+    Ok(())
 }
 
 #[tauri::command]
 fn reset_keynest(
     confirmation: String,
     auth: State<'_, AuthService>,
+    auto_lock: State<'_, AutoLockService>,
 ) -> Result<AuthStatus, PublicAuthError> {
     auth.reset_keynest(&confirmation)
-        .map(|()| auth.status())
+        .map(|()| {
+            auto_lock.disarm();
+            auth.status()
+        })
         .map_err(Into::into)
 }
 
@@ -159,16 +195,27 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir()?;
             let settings_store = SettingsStore::new(app_data_dir.clone());
             let settings = SettingsService::load(settings_store)?;
-            let clipboard_timeout =
-                Duration::from_secs(settings.snapshot(false).clipboard_clear_seconds);
+            let snapshot = settings.snapshot(false);
             app.manage(settings);
-            app.manage(ClipboardService::new(
-                Arc::new(TauriClipboardPort::new(app.handle().clone())),
-                clipboard_timeout,
-            ));
             let kdf_params = KdfParams::production();
             let store = ProfileStore::new(app_data_dir, kdf_params);
-            app.manage(AuthService::load(store, kdf_params, Arc::new(OsEntropy)));
+            let auth = AuthService::load(store, kdf_params, Arc::new(OsEntropy));
+            app.manage(auth.clone());
+            let clipboard = ClipboardService::new(
+                Arc::new(TauriClipboardPort::new(app.handle().clone())),
+                Duration::from_secs(snapshot.clipboard_clear_seconds),
+            );
+            app.manage(clipboard.clone());
+            let coordinator = LockCoordinator::new(
+                auth,
+                clipboard,
+                Arc::new(TauriLockEventSink::new(app.handle().clone())),
+            );
+            app.manage(coordinator.clone());
+            app.manage(AutoLockService::new(
+                Arc::new(coordinator),
+                Duration::from_secs(snapshot.auto_lock_seconds),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -177,12 +224,16 @@ pub fn run() {
             unlock,
             change_master_password,
             lock,
+            record_activity,
             reset_keynest
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::Resumed => {
+                let _ = app.state::<AutoLockService>().lock_now();
+            }
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
                 let clipboard = app.state::<ClipboardService>();
                 if clipboard.begin_process_exit_cleanup() {
                     api.prevent_exit();
@@ -192,6 +243,7 @@ pub fn run() {
                         clipboard.start_process_exit_cleanup(Duration::from_millis(250), finish);
                 }
             }
+            _ => {}
         });
 }
 
