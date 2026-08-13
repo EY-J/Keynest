@@ -191,20 +191,21 @@ impl ClipboardService {
 
     fn claim_secret(&self, value: &str) -> Result<CopyPlan, ClipboardError> {
         let _port_guard = self.lock_port_gate();
-        let (generation, timeout) = {
+        let generation = {
             let mut state = self.lock_state();
             let generation = state.next_generation;
             let Some(next) = generation.checked_add(1) else {
                 return Err(ClipboardError::GenerationExhausted);
             };
             state.next_generation = next;
-            (generation, state.timeout)
+            generation
         };
 
         // Clipboard callbacks may block or re-enter the service, so no service lock is held here.
         self.port.write_text(value)?;
 
         let mut state = self.lock_state();
+        let timeout = state.timeout;
         state.owned = Some(OwnedClipboard {
             generation,
             value: Zeroizing::new(value.to_owned()),
@@ -334,52 +335,127 @@ impl ClipboardPort for TauriClipboardPort {
 
 #[cfg(windows)]
 fn windows_compare_and_clear(expected: &str) -> Result<ClearOutcome, ClipboardError> {
-    use std::{ptr, slice};
-    use windows_sys::Win32::System::{
-        DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard},
-        Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+    windows_compare_and_clear_with(&SystemWindowsClipboardApi, expected)
+}
+
+#[cfg(windows)]
+trait WindowsClipboardApi {
+    fn open(&self) -> bool;
+    fn close(&self);
+    fn text_handle(&self) -> Option<usize>;
+    fn global_size(&self, handle: usize) -> usize;
+    fn global_lock(&self, handle: usize) -> Option<*const u16>;
+    fn global_unlock(&self, handle: usize);
+    fn empty(&self) -> bool;
+}
+
+#[cfg(windows)]
+struct SystemWindowsClipboardApi;
+
+#[cfg(windows)]
+impl WindowsClipboardApi for SystemWindowsClipboardApi {
+    fn open(&self) -> bool {
+        use windows_sys::Win32::System::DataExchange::OpenClipboard;
+        unsafe { OpenClipboard(std::ptr::null_mut()) != 0 }
+    }
+
+    fn close(&self) {
+        use windows_sys::Win32::System::DataExchange::CloseClipboard;
+        unsafe {
+            CloseClipboard();
+        }
+    }
+
+    fn text_handle(&self) -> Option<usize> {
+        use windows_sys::Win32::System::DataExchange::GetClipboardData;
+        const CF_UNICODETEXT: u32 = 13;
+        let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
+        (!handle.is_null()).then_some(handle as usize)
+    }
+
+    fn global_size(&self, handle: usize) -> usize {
+        use windows_sys::Win32::System::Memory::GlobalSize;
+        unsafe { GlobalSize(handle as *mut core::ffi::c_void) }
+    }
+
+    fn global_lock(&self, handle: usize) -> Option<*const u16> {
+        use windows_sys::Win32::System::Memory::GlobalLock;
+        let pointer = unsafe { GlobalLock(handle as *mut core::ffi::c_void) }.cast::<u16>();
+        (!pointer.is_null()).then_some(pointer)
+    }
+
+    fn global_unlock(&self, handle: usize) {
+        use windows_sys::Win32::System::Memory::GlobalUnlock;
+        unsafe {
+            GlobalUnlock(handle as *mut core::ffi::c_void);
+        }
+    }
+
+    fn empty(&self) -> bool {
+        use windows_sys::Win32::System::DataExchange::EmptyClipboard;
+        unsafe { EmptyClipboard() != 0 }
+    }
+}
+
+#[cfg(windows)]
+struct ClipboardGuard<'a, A: WindowsClipboardApi>(&'a A);
+
+#[cfg(windows)]
+impl<A: WindowsClipboardApi> Drop for ClipboardGuard<'_, A> {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+#[cfg(windows)]
+struct GlobalUnlockGuard<'a, A: WindowsClipboardApi> {
+    api: &'a A,
+    handle: usize,
+}
+
+#[cfg(windows)]
+impl<A: WindowsClipboardApi> Drop for GlobalUnlockGuard<'_, A> {
+    fn drop(&mut self) {
+        self.api.global_unlock(self.handle);
+    }
+}
+
+#[cfg(windows)]
+fn windows_compare_and_clear_with(
+    api: &impl WindowsClipboardApi,
+    expected: &str,
+) -> Result<ClearOutcome, ClipboardError> {
+    use std::slice;
+
+    if !api.open() {
+        return Err(ClipboardError::ReadFailed);
+    }
+    let _clipboard_guard = ClipboardGuard(api);
+    let Some(handle) = api.text_handle() else {
+        return Ok(ClearOutcome::Changed);
     };
-
-    const CF_UNICODETEXT: u32 = 13;
-
-    struct ClipboardGuard;
-    impl Drop for ClipboardGuard {
-        fn drop(&mut self) {
-            unsafe {
-                CloseClipboard();
-            }
-        }
+    let Some(pointer) = api.global_lock(handle) else {
+        return Err(ClipboardError::ReadFailed);
+    };
+    let _unlock_guard = GlobalUnlockGuard { api, handle };
+    let size = api.global_size(handle);
+    if size < size_of::<u16>() {
+        return Err(ClipboardError::ReadFailed);
     }
 
-    unsafe {
-        if OpenClipboard(ptr::null_mut()) == 0 {
-            return Err(ClipboardError::ReadFailed);
-        }
-        let _guard = ClipboardGuard;
-        let handle = GetClipboardData(CF_UNICODETEXT);
-        if handle.is_null() {
-            return Ok(ClearOutcome::Changed);
-        }
-        let size = GlobalSize(handle);
-        let pointer = GlobalLock(handle).cast::<u16>();
-        if pointer.is_null() || size < size_of::<u16>() {
-            return Err(ClipboardError::ReadFailed);
-        }
-        let units = slice::from_raw_parts(pointer, size / size_of::<u16>());
-        let length = units
-            .iter()
-            .position(|unit| *unit == 0)
-            .unwrap_or(units.len());
-        let matches = units[..length].iter().copied().eq(expected.encode_utf16());
-        GlobalUnlock(handle);
-        if !matches {
-            return Ok(ClearOutcome::Changed);
-        }
-        if EmptyClipboard() == 0 {
-            return Err(ClipboardError::ClearFailed);
-        }
-        Ok(ClearOutcome::Cleared)
+    let units = unsafe { slice::from_raw_parts(pointer, size / size_of::<u16>()) };
+    let length = units
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(units.len());
+    let matches = units[..length].iter().copied().eq(expected.encode_utf16());
+    if !matches {
+        return Ok(ClearOutcome::Changed);
     }
+    if !api.empty() {
+        return Err(ClipboardError::ClearFailed);
+    }
+    Ok(ClearOutcome::Cleared)
 }
 
 #[cfg(test)]
@@ -450,6 +526,13 @@ mod tests {
         clears: Mutex<usize>,
         external_write_during_compare: Mutex<Option<String>>,
         block_compare: (Mutex<bool>, Condvar),
+        block_write: (Mutex<WriteBlock>, Condvar),
+    }
+
+    #[derive(Default)]
+    struct WriteBlock {
+        blocked: bool,
+        entered: bool,
     }
 
     impl FakeClipboard {
@@ -492,11 +575,37 @@ mod tests {
             *self.block_compare.0.lock().unwrap() = false;
             self.block_compare.1.notify_all();
         }
+
+        fn block_write(&self) {
+            self.block_write.0.lock().unwrap().blocked = true;
+        }
+
+        fn wait_until_write_is_blocked(&self) {
+            let mut state = self.block_write.0.lock().unwrap();
+            while !state.entered {
+                state = self.block_write.1.wait(state).unwrap();
+            }
+        }
+
+        fn release_write(&self) {
+            let mut state = self.block_write.0.lock().unwrap();
+            state.blocked = false;
+            self.block_write.1.notify_all();
+        }
     }
 
     impl ClipboardPort for FakeClipboard {
         fn write_text(&self, value: &str) -> Result<(), ClipboardError> {
             self.invoke_callback();
+            let mut write = self.block_write.0.lock().unwrap();
+            if write.blocked {
+                write.entered = true;
+                self.block_write.1.notify_all();
+                while write.blocked {
+                    write = self.block_write.1.wait(write).unwrap();
+                }
+            }
+            drop(write);
             if *self.failure.lock().unwrap() == Some(Failure::Write) {
                 return Err(ClipboardError::WriteFailed);
             }
@@ -672,6 +781,180 @@ mod tests {
         scheduler.run_next();
         assert_eq!(port.text(), "");
         assert!(!service.has_owned_value_for_test());
+    }
+
+    #[test]
+    fn copy_captures_timeout_after_a_blocked_write_succeeds() {
+        let port = Arc::new(FakeClipboard::default());
+        port.block_write();
+        let scheduler = Arc::new(FakeScheduler::default());
+        let service = ClipboardService::new_with_scheduler(
+            port.clone(),
+            Duration::from_secs(60),
+            scheduler.clone(),
+        );
+        let copy_service = service.clone();
+        let copy = std::thread::spawn(move || copy_service.copy_secret("secret"));
+
+        port.wait_until_write_is_blocked();
+        service.set_timeout(Duration::from_secs(10)).unwrap();
+        port.release_write();
+
+        copy.join().unwrap().unwrap();
+        assert_eq!(scheduler.delays(), vec![Duration::from_secs(10)]);
+        assert_eq!(port.text(), "secret");
+        assert!(service.has_owned_value_for_test());
+    }
+
+    #[cfg(windows)]
+    mod windows_api_tests {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct FakeWindowsClipboardApi {
+            open: bool,
+            has_handle: bool,
+            lock: bool,
+            size: usize,
+            text: Vec<u16>,
+            empty: bool,
+            closes: AtomicUsize,
+            unlocks: AtomicUsize,
+            empties: AtomicUsize,
+        }
+
+        impl FakeWindowsClipboardApi {
+            fn text(value: &str) -> Self {
+                let mut text: Vec<u16> = value.encode_utf16().collect();
+                text.push(0);
+                Self {
+                    open: true,
+                    has_handle: true,
+                    lock: true,
+                    size: text.len() * size_of::<u16>(),
+                    text,
+                    empty: true,
+                    closes: AtomicUsize::new(0),
+                    unlocks: AtomicUsize::new(0),
+                    empties: AtomicUsize::new(0),
+                }
+            }
+        }
+
+        impl WindowsClipboardApi for FakeWindowsClipboardApi {
+            fn open(&self) -> bool {
+                self.open
+            }
+
+            fn close(&self) {
+                self.closes.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn text_handle(&self) -> Option<usize> {
+                self.has_handle.then_some(1)
+            }
+
+            fn global_size(&self, _handle: usize) -> usize {
+                self.size
+            }
+
+            fn global_lock(&self, _handle: usize) -> Option<*const u16> {
+                self.lock.then_some(self.text.as_ptr())
+            }
+
+            fn global_unlock(&self, _handle: usize) {
+                self.unlocks.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn empty(&self) -> bool {
+                self.empties.fetch_add(1, Ordering::SeqCst);
+                self.empty
+            }
+        }
+
+        fn assert_balanced(
+            api: &FakeWindowsClipboardApi,
+            result: Result<ClearOutcome, ClipboardError>,
+            expected: Result<ClearOutcome, ClipboardError>,
+            unlocks: usize,
+            empties: usize,
+        ) {
+            assert_eq!(format!("{result:?}"), format!("{expected:?}"));
+            assert_eq!(api.closes.load(Ordering::SeqCst), usize::from(api.open));
+            assert_eq!(api.unlocks.load(Ordering::SeqCst), unlocks);
+            assert_eq!(api.empties.load(Ordering::SeqCst), empties);
+        }
+
+        #[test]
+        fn windows_wrapper_balances_guards_on_every_result_path() {
+            let mut open_failed = FakeWindowsClipboardApi::text("secret");
+            open_failed.open = false;
+            assert_balanced(
+                &open_failed,
+                windows_compare_and_clear_with(&open_failed, "secret"),
+                Err(ClipboardError::ReadFailed),
+                0,
+                0,
+            );
+
+            let matching = FakeWindowsClipboardApi::text("secret");
+            assert_balanced(
+                &matching,
+                windows_compare_and_clear_with(&matching, "secret"),
+                Ok(ClearOutcome::Cleared),
+                1,
+                1,
+            );
+
+            let changed = FakeWindowsClipboardApi::text("changed");
+            assert_balanced(
+                &changed,
+                windows_compare_and_clear_with(&changed, "secret"),
+                Ok(ClearOutcome::Changed),
+                1,
+                0,
+            );
+
+            let mut missing = FakeWindowsClipboardApi::text("secret");
+            missing.has_handle = false;
+            assert_balanced(
+                &missing,
+                windows_compare_and_clear_with(&missing, "secret"),
+                Ok(ClearOutcome::Changed),
+                0,
+                0,
+            );
+
+            let mut lock_failed = FakeWindowsClipboardApi::text("secret");
+            lock_failed.lock = false;
+            assert_balanced(
+                &lock_failed,
+                windows_compare_and_clear_with(&lock_failed, "secret"),
+                Err(ClipboardError::ReadFailed),
+                0,
+                0,
+            );
+
+            let mut malformed = FakeWindowsClipboardApi::text("secret");
+            malformed.size = 1;
+            assert_balanced(
+                &malformed,
+                windows_compare_and_clear_with(&malformed, "secret"),
+                Err(ClipboardError::ReadFailed),
+                1,
+                0,
+            );
+
+            let mut empty_failed = FakeWindowsClipboardApi::text("secret");
+            empty_failed.empty = false;
+            assert_balanced(
+                &empty_failed,
+                windows_compare_and_clear_with(&empty_failed, "secret"),
+                Err(ClipboardError::ClearFailed),
+                1,
+                1,
+            );
+        }
     }
 
     #[test]
