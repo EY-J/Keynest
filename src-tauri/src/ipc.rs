@@ -244,6 +244,16 @@ pub(crate) fn record_activity_if_unlocked(
     Ok(())
 }
 
+fn dispatch_record_activity(
+    auth: AuthService,
+    auto_lock: AutoLockService,
+    operation_gate: SecurityOperationGate,
+) -> tauri::async_runtime::JoinHandle<Result<(), PublicIpcError>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        record_activity_if_unlocked(&auth, &auto_lock, &operation_gate).map_err(Into::into)
+    })
+}
+
 pub(crate) fn get_settings_snapshot(
     settings: &SettingsService,
     startup: &StartupService,
@@ -651,13 +661,17 @@ pub(crate) async fn set_launch_at_startup(
 }
 
 #[tauri::command]
-pub(crate) fn record_activity(
+pub(crate) async fn record_activity(
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
     operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<(), PublicIpcError> {
-    record_activity_if_unlocked(auth.inner(), auto_lock.inner(), operation_gate.inner())
-        .map_err(Into::into)
+    let task = dispatch_record_activity(
+        auth.inner().clone(),
+        auto_lock.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    task.await.map_err(|_| PublicIpcError::internal())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2181,5 +2195,67 @@ mod command_tests {
             ),
             Ok(AuthStatus::Unlocked)
         );
+    }
+
+    #[test]
+    fn activity_dispatch_returns_pending_promptly_then_records_after_gate_release() {
+        let fixture = CommandFixture::new();
+        create_master_password_and_arm(
+            PASSWORD,
+            &fixture.auth,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let old_activity = Instant::now() - Duration::from_secs(30);
+        fixture.auto_lock.arm_at_for_test(old_activity);
+        let guard = fixture.operation_gate.lock();
+
+        let dispatched = dispatch_record_activity(
+            fixture.auth.clone(),
+            fixture.auto_lock.clone(),
+            fixture.operation_gate.clone(),
+        );
+
+        assert!(!dispatched.inner().is_finished());
+        drop(guard);
+        tauri::async_runtime::block_on(dispatched).unwrap().unwrap();
+        assert!(!fixture
+            .auto_lock
+            .expire_at_for_test(old_activity + Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn activity_dispatch_rechecks_authorization_after_waiting_for_gate() {
+        let fixture = CommandFixture::new();
+        create_master_password_and_arm(
+            PASSWORD,
+            &fixture.auth,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let guard = fixture.operation_gate.lock();
+        let dispatched = dispatch_record_activity(
+            fixture.auth.clone(),
+            fixture.auto_lock.clone(),
+            fixture.operation_gate.clone(),
+        );
+        assert!(!dispatched.inner().is_finished());
+
+        assert_eq!(
+            fixture
+                .auto_lock
+                .lock_now_with_operation_guard(&guard)
+                .unwrap(),
+            AuthStatus::Locked
+        );
+        drop(guard);
+
+        let error = tauri::async_runtime::block_on(dispatched)
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "unauthorized");
+        assert_eq!(fixture.auth.status(), AuthStatus::Locked);
     }
 }
