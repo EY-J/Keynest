@@ -437,7 +437,7 @@ fn windows_compare_and_clear_with(
     let Some(pointer) = api.global_lock(handle) else {
         return Err(ClipboardError::ReadFailed);
     };
-    let _unlock_guard = GlobalUnlockGuard { api, handle };
+    let unlock_guard = GlobalUnlockGuard { api, handle };
     let size = api.global_size(handle);
     if size < size_of::<u16>() {
         return Err(ClipboardError::ReadFailed);
@@ -449,6 +449,7 @@ fn windows_compare_and_clear_with(
         .position(|unit| *unit == 0)
         .unwrap_or(units.len());
     let matches = units[..length].iter().copied().eq(expected.encode_utf16());
+    drop(unlock_guard);
     if !matches {
         return Ok(ClearOutcome::Changed);
     }
@@ -821,6 +822,7 @@ mod tests {
             closes: AtomicUsize,
             unlocks: AtomicUsize,
             empties: AtomicUsize,
+            calls: Mutex<Vec<&'static str>>,
         }
 
         impl FakeWindowsClipboardApi {
@@ -837,16 +839,23 @@ mod tests {
                     closes: AtomicUsize::new(0),
                     unlocks: AtomicUsize::new(0),
                     empties: AtomicUsize::new(0),
+                    calls: Mutex::new(Vec::new()),
                 }
+            }
+
+            fn record(&self, call: &'static str) {
+                self.calls.lock().unwrap().push(call);
             }
         }
 
         impl WindowsClipboardApi for FakeWindowsClipboardApi {
             fn open(&self) -> bool {
+                self.record("open");
                 self.open
             }
 
             fn close(&self) {
+                self.record("close");
                 self.closes.fetch_add(1, Ordering::SeqCst);
             }
 
@@ -859,14 +868,17 @@ mod tests {
             }
 
             fn global_lock(&self, _handle: usize) -> Option<*const u16> {
+                self.record("lock");
                 self.lock.then_some(self.text.as_ptr())
             }
 
             fn global_unlock(&self, _handle: usize) {
+                self.record("unlock");
                 self.unlocks.fetch_add(1, Ordering::SeqCst);
             }
 
             fn empty(&self) -> bool {
+                self.record("empty");
                 self.empties.fetch_add(1, Ordering::SeqCst);
                 self.empty
             }
@@ -878,11 +890,13 @@ mod tests {
             expected: Result<ClearOutcome, ClipboardError>,
             unlocks: usize,
             empties: usize,
+            calls: &[&'static str],
         ) {
             assert_eq!(format!("{result:?}"), format!("{expected:?}"));
             assert_eq!(api.closes.load(Ordering::SeqCst), usize::from(api.open));
             assert_eq!(api.unlocks.load(Ordering::SeqCst), unlocks);
             assert_eq!(api.empties.load(Ordering::SeqCst), empties);
+            assert_eq!(api.calls.lock().unwrap().as_slice(), calls);
         }
 
         #[test]
@@ -895,6 +909,7 @@ mod tests {
                 Err(ClipboardError::ReadFailed),
                 0,
                 0,
+                &["open"],
             );
 
             let matching = FakeWindowsClipboardApi::text("secret");
@@ -904,6 +919,7 @@ mod tests {
                 Ok(ClearOutcome::Cleared),
                 1,
                 1,
+                &["open", "lock", "unlock", "empty", "close"],
             );
 
             let changed = FakeWindowsClipboardApi::text("changed");
@@ -913,6 +929,7 @@ mod tests {
                 Ok(ClearOutcome::Changed),
                 1,
                 0,
+                &["open", "lock", "unlock", "close"],
             );
 
             let mut missing = FakeWindowsClipboardApi::text("secret");
@@ -923,6 +940,7 @@ mod tests {
                 Ok(ClearOutcome::Changed),
                 0,
                 0,
+                &["open", "close"],
             );
 
             let mut lock_failed = FakeWindowsClipboardApi::text("secret");
@@ -933,6 +951,7 @@ mod tests {
                 Err(ClipboardError::ReadFailed),
                 0,
                 0,
+                &["open", "lock", "close"],
             );
 
             let mut malformed = FakeWindowsClipboardApi::text("secret");
@@ -943,6 +962,7 @@ mod tests {
                 Err(ClipboardError::ReadFailed),
                 1,
                 0,
+                &["open", "lock", "unlock", "close"],
             );
 
             let mut empty_failed = FakeWindowsClipboardApi::text("secret");
@@ -953,6 +973,7 @@ mod tests {
                 Err(ClipboardError::ClearFailed),
                 1,
                 1,
+                &["open", "lock", "unlock", "empty", "close"],
             );
         }
     }
