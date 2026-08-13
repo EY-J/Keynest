@@ -116,6 +116,23 @@ async fn unlock(
 }
 
 #[tauri::command]
+async fn change_master_password(
+    mut current_password: String,
+    mut new_password: String,
+    auth: State<'_, AuthService>,
+) -> Result<AuthStatus, PublicAuthError> {
+    let service = auth.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = service.change_master_password(&current_password, &new_password);
+        current_password.zeroize();
+        new_password.zeroize();
+        result.map(|()| service.status()).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicAuthError::internal())?
+}
+
+#[tauri::command]
 fn lock(auth: State<'_, AuthService>) -> AuthStatus {
     auth.lock()
 }
@@ -147,6 +164,7 @@ pub fn run() {
             get_auth_status,
             create_master_password,
             unlock,
+            change_master_password,
             lock,
             reset_keynest
         ])
@@ -190,5 +208,35 @@ mod command_tests {
 
         assert_eq!(public.code, "throttled");
         assert_eq!(public.retry_after_ms, Some(2_000));
+    }
+
+    #[test]
+    fn password_change_public_error_serializes_password_too_short_safely() {
+        let public = PublicAuthError::from(AuthError::PasswordTooShort);
+        let serialized = serde_json::to_value(public).unwrap();
+
+        assert_eq!(serialized["code"], "password-too-short");
+        assert_eq!(serialized["message"], "Use at least 12 characters.");
+        assert!(serialized.get("retryAfterMs").is_none());
+    }
+
+    #[test]
+    fn password_change_public_error_serializes_invalid_credentials_safely() {
+        let public = PublicAuthError::from(AuthError::InvalidCredentials);
+        let serialized = serde_json::to_value(public).unwrap();
+
+        assert_eq!(serialized["code"], "invalid-credentials");
+        assert_eq!(serialized["message"], "The master password is incorrect.");
+        assert!(serialized.get("retryAfterMs").is_none());
+    }
+
+    #[test]
+    fn password_change_public_error_serializes_unauthorized_safely() {
+        let public = PublicAuthError::from(AuthError::Unauthorized);
+        let serialized = serde_json::to_value(public).unwrap();
+
+        assert_eq!(serialized["code"], "unauthorized");
+        assert_eq!(serialized["message"], "KeyNest is locked.");
+        assert!(serialized.get("retryAfterMs").is_none());
     }
 }

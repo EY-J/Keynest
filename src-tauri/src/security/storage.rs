@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use atomic_write_file::AtomicWriteFile;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
@@ -56,6 +57,8 @@ impl StoredProfile {
 pub(crate) struct ProfileStore {
     app_data_dir: PathBuf,
     accepted_kdf: KdfParams,
+    #[cfg(test)]
+    fail_next_replace: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ProfileStore {
@@ -63,6 +66,8 @@ impl ProfileStore {
         Self {
             app_data_dir,
             accepted_kdf,
+            #[cfg(test)]
+            fail_next_replace: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -98,6 +103,34 @@ impl ProfileStore {
                 }
             })?;
         Ok(())
+    }
+
+    pub(crate) fn replace(&self, profile: &StoredProfile) -> Result<(), StorageError> {
+        profile.validate(self.accepted_kdf)?;
+        fs::create_dir_all(&self.app_data_dir).map_err(StorageError::Io)?;
+
+        let bytes = serde_json::to_vec_pretty(profile).map_err(StorageError::Serialization)?;
+        let mut file = AtomicWriteFile::open(self.profile_path()).map_err(StorageError::Io)?;
+        file.write_all(&bytes).map_err(StorageError::Io)?;
+        file.sync_all().map_err(StorageError::Io)?;
+
+        #[cfg(test)]
+        if self
+            .fail_next_replace
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StorageError::Io(io::Error::other(
+                "injected profile replacement failure",
+            )));
+        }
+
+        file.commit().map_err(StorageError::Io)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_replace_for_test(&self) {
+        self.fail_next_replace
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub(crate) fn reset(&self) -> Result<(), StorageError> {
@@ -240,5 +273,23 @@ mod tests {
 
         assert!(matches!(store.reset(), Err(StorageError::Io(_))));
         assert!(temp.path().join("profile.json").exists());
+    }
+
+    #[test]
+    fn password_change_atomic_replace_failure_preserves_original_profile_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        let (original, _) = profile_fixture("old secure master password");
+        let (replacement, _) = profile_fixture("new secure master password");
+        store.create(&original).unwrap();
+        let original_bytes = std::fs::read(store.profile_path()).unwrap();
+        store.fail_next_replace_for_test();
+
+        assert!(matches!(
+            store.replace(&replacement),
+            Err(StorageError::Io(_))
+        ));
+        assert_eq!(std::fs::read(store.profile_path()).unwrap(), original_bytes);
+        assert_eq!(store.load().unwrap(), ProfileLoad::Valid(original));
     }
 }
