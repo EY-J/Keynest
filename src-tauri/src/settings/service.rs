@@ -203,16 +203,68 @@ mod tests {
     }
 
     #[test]
-    fn reset_removes_saved_settings_and_restores_defaults() {
+    fn reset_removes_saved_settings_restores_defaults_and_preserves_unrelated_files() {
         let temp = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(temp.path().to_path_buf());
         let service = SettingsService::load(store.clone()).unwrap();
         service.set_auto_lock_seconds(900).unwrap();
+        service.set_clipboard_clear_seconds(60).unwrap();
+        service.set_theme(ThemePreference::Dark).unwrap();
+        std::fs::write(temp.path().join("keep.txt"), b"unrelated").unwrap();
 
         service.reset().unwrap();
 
         assert_eq!(store.load().unwrap(), SettingsLoad::Missing);
-        assert_eq!(service.snapshot(false).auto_lock_seconds, 300);
+        let snapshot = service.snapshot(false);
+        assert_eq!(snapshot.auto_lock_seconds, 300);
+        assert_eq!(snapshot.clipboard_clear_seconds, 30);
+        assert_eq!(snapshot.theme, ThemePreference::System);
+        assert_eq!(snapshot.warning, None);
+        assert_eq!(
+            std::fs::read(temp.path().join("keep.txt")).unwrap(),
+            b"unrelated"
+        );
+    }
+
+    #[test]
+    fn reset_clears_a_damaged_settings_warning_after_successful_deletion() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("settings.json"), b"not-json").unwrap();
+        let store = SettingsStore::new(temp.path().to_path_buf());
+        let service = SettingsService::load(store.clone()).unwrap();
+        assert_eq!(
+            service.snapshot(false).warning.as_deref(),
+            Some(DAMAGED_WARNING)
+        );
+
+        service.reset().unwrap();
+
+        assert_eq!(store.load().unwrap(), SettingsLoad::Missing);
         assert_eq!(service.snapshot(false).warning, None);
+    }
+
+    #[test]
+    fn failed_reset_preserves_in_memory_values_and_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("settings.json"), b"not-json").unwrap();
+        let store = SettingsStore::new(temp.path().to_path_buf());
+        let service = SettingsService::load(store.clone()).unwrap();
+        service.set_auto_lock_seconds(900).unwrap();
+        service.set_clipboard_clear_seconds(60).unwrap();
+        service.set_theme(ThemePreference::Light).unwrap();
+        let before = service.snapshot(false);
+        store.fail_next_reset_for_test();
+
+        assert!(matches!(service.reset(), Err(SettingsError::Storage(_))));
+
+        let after = service.snapshot(false);
+        assert_eq!(after.auto_lock_seconds, before.auto_lock_seconds);
+        assert_eq!(
+            after.clipboard_clear_seconds,
+            before.clipboard_clear_seconds
+        );
+        assert_eq!(after.theme, before.theme);
+        assert_eq!(after.warning, before.warning);
+        assert!(temp.path().join("settings.json").is_file());
     }
 }

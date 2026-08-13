@@ -46,11 +46,17 @@ impl StoredSettings {
 #[derive(Clone, Debug)]
 pub(crate) struct SettingsStore {
     app_data_dir: PathBuf,
+    #[cfg(test)]
+    fail_next_reset: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SettingsStore {
     pub(crate) fn new(app_data_dir: PathBuf) -> Self {
-        Self { app_data_dir }
+        Self {
+            app_data_dir,
+            #[cfg(test)]
+            fail_next_reset: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     pub(crate) fn load(&self) -> Result<SettingsLoad, SettingsStorageError> {
@@ -87,11 +93,27 @@ impl SettingsStore {
     }
 
     pub(crate) fn reset(&self) -> Result<(), SettingsStorageError> {
+        #[cfg(test)]
+        if self
+            .fail_next_reset
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(SettingsStorageError::Io(io::Error::other(
+                "injected settings deletion failure",
+            )));
+        }
+
         match fs::remove_file(self.settings_path()) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(SettingsStorageError::Io(error)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_reset_for_test(&self) {
+        self.fail_next_reset
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn settings_path(&self) -> PathBuf {

@@ -58,7 +58,7 @@ impl From<AuthError> for PublicAuthError {
             },
             AuthError::InvalidResetConfirmation => Self {
                 code: "invalid-reset-confirmation",
-                message: "Type RESET exactly to confirm.",
+                message: "Type RESET KEYNEST exactly to confirm.",
                 retry_after_ms: None,
             },
             AuthError::Unauthorized => Self {
@@ -238,5 +238,13 @@ mod command_tests {
         assert_eq!(serialized["code"], "unauthorized");
         assert_eq!(serialized["message"], "KeyNest is locked.");
         assert!(serialized.get("retryAfterMs").is_none());
+    }
+
+    #[test]
+    fn reset_confirmation_public_error_names_the_exact_required_phrase() {
+        let public = PublicAuthError::from(AuthError::InvalidResetConfirmation);
+
+        assert_eq!(public.code, "invalid-reset-confirmation");
+        assert_eq!(public.message, "Type RESET KEYNEST exactly to confirm.");
     }
 }
