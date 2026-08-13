@@ -287,7 +287,10 @@ fn record_failed_attempt(inner: &mut AuthInner, now: Instant) {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::Arc,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
         time::{Duration, Instant},
     };
 
@@ -306,6 +309,44 @@ mod tests {
                 *byte = length.wrapping_add(index as u8);
             }
             Ok(())
+        }
+    }
+
+    struct AlternateEntropy;
+
+    impl EntropySource for AlternateEntropy {
+        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            let length = destination.len() as u8;
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = length.wrapping_add(index as u8).wrapping_add(1);
+            }
+            Ok(())
+        }
+    }
+
+    struct SwitchableEntropy {
+        fail: AtomicBool,
+    }
+
+    impl SwitchableEntropy {
+        fn working() -> Self {
+            Self {
+                fail: AtomicBool::new(false),
+            }
+        }
+
+        fn fail(&self) {
+            self.fail.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl EntropySource for SwitchableEntropy {
+        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(CryptoError::EntropyUnavailable);
+            }
+
+            FixedEntropy.fill(destination)
         }
     }
 
@@ -622,5 +663,90 @@ mod tests {
             .service
             .unlock("old secure master password")
             .unwrap();
+    }
+
+    #[test]
+    fn password_change_entropy_failure_preserves_disk_password_key_and_unlocked_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf(), params);
+        let entropy = Arc::new(SwitchableEntropy::working());
+        let service = AuthService::load(store, params, entropy.clone());
+        service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_key = service.require_vault_key(|key| *key).unwrap();
+        let before_profile = std::fs::read(service.store.profile_path()).unwrap();
+        entropy.fail();
+
+        assert_eq!(
+            service
+                .change_master_password("old secure master password", "new secure master password"),
+            Err(AuthError::LocalDataFailure)
+        );
+
+        assert_eq!(service.status(), AuthStatus::Unlocked);
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), before_key);
+        assert_eq!(
+            std::fs::read(service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        service.lock();
+        service.unlock("old secure master password").unwrap();
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), before_key);
+    }
+
+    #[test]
+    fn password_change_live_key_mismatch_fails_closed_without_storage_or_session_mutation() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_profile = std::fs::read(fixture.service.store.profile_path()).unwrap();
+        let (_, mismatched_live_key) = wrap_new_vault_key(
+            "unrelated secure master password",
+            KdfParams::testing(),
+            &AlternateEntropy,
+        )
+        .unwrap();
+        let mismatched_key_bytes = *mismatched_live_key.expose();
+        {
+            let mut inner = fixture.service.lock_inner();
+            let profile = match &inner.state {
+                AuthState::Unlocked { profile, .. } => profile.clone(),
+                _ => panic!("fixture must be unlocked"),
+            };
+            inner.state = AuthState::Unlocked {
+                profile,
+                vault_key: mismatched_live_key,
+            };
+        }
+
+        assert_eq!(
+            fixture
+                .service
+                .change_master_password("old secure master password", "new secure master password"),
+            Err(AuthError::DataDamaged)
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            mismatched_key_bytes
+        );
+        assert_eq!(
+            std::fs::read(fixture.service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        fixture.service.lock();
+        fixture
+            .service
+            .unlock("old secure master password")
+            .unwrap();
+        assert_ne!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            mismatched_key_bytes
+        );
     }
 }
