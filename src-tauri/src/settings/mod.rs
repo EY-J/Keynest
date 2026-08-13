@@ -2,7 +2,9 @@ mod model;
 mod service;
 mod storage;
 
-pub(crate) use model::{SettingsSnapshot, SettingsValues, ThemePreference};
+pub(crate) use model::SettingsSnapshot;
+#[cfg(test)]
+pub(crate) use model::{SettingsValues, ThemePreference};
 pub(crate) use service::{SettingsError, SettingsService};
 pub(crate) use storage::SettingsStore;
 

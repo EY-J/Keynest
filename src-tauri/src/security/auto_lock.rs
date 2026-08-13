@@ -303,6 +303,11 @@ impl AutoLockService {
     }
 
     #[cfg(test)]
+    pub(crate) fn timeout_for_test(&self) -> Duration {
+        self.supervisor.shared.0.lock_unpoisoned().timeout
+    }
+
+    #[cfg(test)]
     fn notify_for_test(&self) {
         self.supervisor.shared.1.notify_all();
     }

@@ -72,6 +72,11 @@ impl SettingsService {
         self.replace_values(|values| values.theme = theme)
     }
 
+    pub(crate) fn set_theme_name(&self, theme: &str) -> Result<(), SettingsError> {
+        let theme = ThemePreference::parse(theme).ok_or(SettingsError::InvalidTheme)?;
+        self.set_theme(theme)
+    }
+
     pub(crate) fn reset(&self) -> Result<(), SettingsError> {
         let mut inner = self.lock_inner();
         self.store.reset()?;
@@ -105,6 +110,8 @@ pub(crate) enum SettingsError {
     InvalidAutoLockSeconds,
     #[error("clipboard-clear duration is not supported")]
     InvalidClipboardClearSeconds,
+    #[error("theme is not supported")]
+    InvalidTheme,
     #[error(transparent)]
     Storage(#[from] SettingsStorageError),
 }

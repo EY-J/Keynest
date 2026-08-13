@@ -189,6 +189,11 @@ impl ClipboardService {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn timeout_for_test(&self) -> Duration {
+        self.lock_state().timeout
+    }
+
     fn claim_secret(&self, value: &str) -> Result<CopyPlan, ClipboardError> {
         let _port_guard = self.lock_port_gate();
         let generation = {

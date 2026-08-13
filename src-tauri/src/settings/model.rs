@@ -12,6 +12,17 @@ pub(crate) enum ThemePreference {
     Light,
 }
 
+impl ThemePreference {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "system" => Some(Self::System),
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SettingsValues {
     pub auto_lock_seconds: u64,

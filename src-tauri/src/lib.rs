@@ -1,134 +1,21 @@
+mod ipc;
+mod platform;
 mod security;
 mod settings;
 
 use std::{sync::Arc, time::Duration};
 
-use security::{
-    AuthError, AuthService, AuthStatus, AutoLockService, ClipboardService, KdfParams,
-    LockCoordinator, LockError, OsEntropy, ProfileStore, TauriClipboardPort, TauriLockEventSink,
+use ipc::DataFolderService;
+use platform::startup::{
+    minimize_for_launch, StartupService, TauriMainWindowMinimizer, TauriStartupRegistration,
 };
-use serde::Serialize;
+use security::{
+    AuthService, AutoLockService, ClipboardService, KdfParams, LockCoordinator, OsEntropy,
+    ProfileStore, TauriClipboardPort, TauriLockEventSink,
+};
 use settings::{SettingsService, SettingsStore};
-use tauri::{Manager, State};
-use zeroize::Zeroize;
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PublicAuthError {
-    code: &'static str,
-    message: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    retry_after_ms: Option<u64>,
-}
-
-impl PublicAuthError {
-    fn internal() -> Self {
-        Self {
-            code: "internal-error",
-            message: "KeyNest could not complete the security request.",
-            retry_after_ms: None,
-        }
-    }
-}
-
-impl From<AuthError> for PublicAuthError {
-    fn from(error: AuthError) -> Self {
-        match error {
-            AuthError::PasswordTooShort => Self {
-                code: "password-too-short",
-                message: "Use at least 12 characters.",
-                retry_after_ms: None,
-            },
-            AuthError::AlreadyInitialized => Self {
-                code: "already-initialized",
-                message: "KeyNest already has a master password.",
-                retry_after_ms: None,
-            },
-            AuthError::NotInitialized => Self {
-                code: "not-initialized",
-                message: "Create a master password before unlocking KeyNest.",
-                retry_after_ms: None,
-            },
-            AuthError::InvalidCredentials => Self {
-                code: "invalid-credentials",
-                message: "The master password is incorrect.",
-                retry_after_ms: None,
-            },
-            AuthError::Throttled { retry_after_ms } => Self {
-                code: "throttled",
-                message: "Wait a moment before trying again.",
-                retry_after_ms: Some(retry_after_ms),
-            },
-            AuthError::InvalidResetConfirmation => Self {
-                code: "invalid-reset-confirmation",
-                message: "Type RESET KEYNEST exactly to confirm.",
-                retry_after_ms: None,
-            },
-            AuthError::Unauthorized => Self {
-                code: "unauthorized",
-                message: "KeyNest is locked.",
-                retry_after_ms: None,
-            },
-            AuthError::DataDamaged => Self {
-                code: "data-error",
-                message: "KeyNest's encrypted local data is damaged or unsupported.",
-                retry_after_ms: None,
-            },
-            AuthError::LocalDataFailure => Self {
-                code: "local-data-error",
-                message: "KeyNest could not access its encrypted local data.",
-                retry_after_ms: None,
-            },
-        }
-    }
-}
-
-impl From<LockError> for PublicAuthError {
-    fn from(_: LockError) -> Self {
-        Self::internal()
-    }
-}
-
-fn create_master_password_and_arm(
-    password: &str,
-    auth: &AuthService,
-    auto_lock: &AutoLockService,
-) -> Result<AuthStatus, AuthError> {
-    auth.create_master_password(password)?;
-    auto_lock.arm();
-    Ok(auth.status())
-}
-
-fn unlock_and_arm(
-    password: &str,
-    auth: &AuthService,
-    auto_lock: &AutoLockService,
-) -> Result<AuthStatus, AuthError> {
-    auth.unlock(password)?;
-    auto_lock.arm();
-    Ok(auth.status())
-}
-
-fn record_activity_if_unlocked(
-    auth: &AuthService,
-    auto_lock: &AutoLockService,
-) -> Result<(), AuthError> {
-    if auth.status() != AuthStatus::Unlocked {
-        return Err(AuthError::Unauthorized);
-    }
-    auto_lock.record_activity();
-    Ok(())
-}
-
-fn reset_and_disarm(
-    confirmation: &str,
-    auth: &AuthService,
-    auto_lock: &AutoLockService,
-) -> Result<AuthStatus, AuthError> {
-    auth.reset_keynest(confirmation)?;
-    auto_lock.disarm();
-    Ok(auth.status())
-}
+use tauri::Manager;
+use tauri_plugin_autostart::MacosLauncher;
 
 fn resume_lock(auto_lock: &AutoLockService) {
     let _ = auto_lock.lock_now();
@@ -138,104 +25,40 @@ fn shutdown_auto_lock(auto_lock: &AutoLockService) {
     auto_lock.shutdown();
 }
 
-#[tauri::command]
-fn get_auth_status(auth: State<'_, AuthService>) -> AuthStatus {
-    auth.status()
-}
-
-#[tauri::command]
-async fn create_master_password(
-    mut password: String,
-    auth: State<'_, AuthService>,
-    auto_lock: State<'_, AutoLockService>,
-) -> Result<AuthStatus, PublicAuthError> {
-    let service = auth.inner().clone();
-    let auto_lock = auto_lock.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = create_master_password_and_arm(&password, &service, &auto_lock);
-        password.zeroize();
-        result.map_err(Into::into)
-    })
-    .await
-    .map_err(|_| PublicAuthError::internal())?
-}
-
-#[tauri::command]
-async fn unlock(
-    mut password: String,
-    auth: State<'_, AuthService>,
-    auto_lock: State<'_, AutoLockService>,
-) -> Result<AuthStatus, PublicAuthError> {
-    let service = auth.inner().clone();
-    let auto_lock = auto_lock.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = unlock_and_arm(&password, &service, &auto_lock);
-        password.zeroize();
-        result.map_err(Into::into)
-    })
-    .await
-    .map_err(|_| PublicAuthError::internal())?
-}
-
-#[tauri::command]
-async fn change_master_password(
-    mut current_password: String,
-    mut new_password: String,
-    auth: State<'_, AuthService>,
-) -> Result<AuthStatus, PublicAuthError> {
-    let service = auth.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = service.change_master_password(&current_password, &new_password);
-        current_password.zeroize();
-        new_password.zeroize();
-        result.map(|()| service.status()).map_err(Into::into)
-    })
-    .await
-    .map_err(|_| PublicAuthError::internal())?
-}
-
-#[tauri::command]
-fn lock(auto_lock: State<'_, AutoLockService>) -> Result<AuthStatus, PublicAuthError> {
-    auto_lock.lock_now().map_err(Into::into)
-}
-
-#[tauri::command]
-fn record_activity(
-    auth: State<'_, AuthService>,
-    auto_lock: State<'_, AutoLockService>,
-) -> Result<(), PublicAuthError> {
-    record_activity_if_unlocked(auth.inner(), auto_lock.inner()).map_err(Into::into)
-}
-
-#[tauri::command]
-fn reset_keynest(
-    confirmation: String,
-    auth: State<'_, AuthService>,
-    auto_lock: State<'_, AutoLockService>,
-) -> Result<AuthStatus, PublicAuthError> {
-    reset_and_disarm(&confirmation, auth.inner(), auto_lock.inner()).map_err(Into::into)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .setup(|app| {
+            minimize_for_launch(std::env::args_os(), &TauriMainWindowMinimizer::new(app))?;
+
             let app_data_dir = app.path().app_data_dir()?;
+            app.manage(DataFolderService::new(app_data_dir.clone()));
+            app.manage(StartupService::new(Arc::new(
+                TauriStartupRegistration::new(app.handle().clone()),
+            )));
+
             let settings_store = SettingsStore::new(app_data_dir.clone());
             let settings = SettingsService::load(settings_store)?;
             let snapshot = settings.snapshot(false);
             app.manage(settings);
+
             let kdf_params = KdfParams::production();
             let store = ProfileStore::new(app_data_dir, kdf_params);
             let auth = AuthService::load(store, kdf_params, Arc::new(OsEntropy));
             app.manage(auth.clone());
+
             let clipboard = ClipboardService::new(
                 Arc::new(TauriClipboardPort::new(app.handle().clone())),
                 Duration::from_secs(snapshot.clipboard_clear_seconds),
             );
             app.manage(clipboard.clone());
+
             let coordinator = LockCoordinator::new(
                 auth,
                 clipboard,
@@ -249,13 +72,20 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_auth_status,
-            create_master_password,
-            unlock,
-            change_master_password,
-            lock,
-            record_activity,
-            reset_keynest
+            ipc::get_auth_status,
+            ipc::create_master_password,
+            ipc::unlock,
+            ipc::lock,
+            ipc::get_settings,
+            ipc::set_auto_lock_seconds,
+            ipc::set_clipboard_clear_seconds,
+            ipc::set_theme,
+            ipc::set_launch_at_startup,
+            ipc::record_activity,
+            ipc::change_master_password,
+            ipc::reset_keynest,
+            ipc::reset_keynest_authenticated,
+            ipc::open_keynest_data_folder
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -282,81 +112,15 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod command_tests {
+mod lifecycle_tests {
     use std::{
-        sync::{
-            atomic::{AtomicUsize, Ordering},
-            Arc, Condvar, Mutex,
-        },
+        sync::{Arc, Condvar, Mutex},
         thread,
-        time::{Duration, Instant},
+        time::Duration,
     };
 
-    use tempfile::{tempdir, TempDir};
-
-    use super::{
-        create_master_password_and_arm, record_activity_if_unlocked, reset_and_disarm, resume_lock,
-        unlock_and_arm, AuthError, AuthService, AuthStatus, AutoLockService, KdfParams, LockError,
-        ProfileStore, PublicAuthError,
-    };
-    use crate::security::{CryptoError, EntropySource, LockActions};
-
-    const PASSWORD: &str = "a secure master password";
-
-    struct FixedEntropy;
-
-    impl EntropySource for FixedEntropy {
-        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
-            for (index, byte) in destination.iter_mut().enumerate() {
-                *byte = index as u8;
-            }
-            Ok(())
-        }
-    }
-
-    struct CommandFixture {
-        temp: TempDir,
-        auth: AuthService,
-        auto_lock: AutoLockService,
-    }
-
-    struct AuthLockActions {
-        auth: AuthService,
-        calls: AtomicUsize,
-    }
-
-    impl LockActions for AuthLockActions {
-        fn status(&self) -> AuthStatus {
-            self.auth.status()
-        }
-
-        fn lock(&self) -> Result<AuthStatus, LockError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.auth.lock().status)
-        }
-    }
-
-    impl CommandFixture {
-        fn new() -> Self {
-            let temp = tempdir().unwrap();
-            let params = KdfParams::testing();
-            let auth = AuthService::load(
-                ProfileStore::new(temp.path().to_path_buf(), params),
-                params,
-                Arc::new(FixedEntropy),
-            );
-            let actions = Arc::new(AuthLockActions {
-                auth: auth.clone(),
-                calls: AtomicUsize::new(0),
-            });
-            let auto_lock = AutoLockService::new_for_test(actions, Duration::from_secs(300));
-            Self {
-                temp,
-                auth,
-                auto_lock,
-            }
-        }
-    }
+    use super::{resume_lock, AutoLockService};
+    use crate::security::{AuthStatus, LockActions, LockError};
 
     struct BlockingResumeActions {
         started: (Mutex<bool>, Condvar),
@@ -404,154 +168,6 @@ mod command_tests {
             );
             Ok(AuthStatus::Locked)
         }
-    }
-
-    #[test]
-    fn auth_status_uses_kebab_case_ipc_values() {
-        assert_eq!(
-            serde_json::to_string(&AuthStatus::SetupRequired).unwrap(),
-            "\"setup-required\""
-        );
-        assert_eq!(
-            serde_json::to_string(&AuthStatus::DataError).unwrap(),
-            "\"data-error\""
-        );
-    }
-
-    #[test]
-    fn invalid_credentials_expose_only_a_generic_message() {
-        let public = PublicAuthError::from(AuthError::InvalidCredentials);
-
-        assert_eq!(public.code, "invalid-credentials");
-        assert_eq!(public.message, "The master password is incorrect.");
-        assert_eq!(public.retry_after_ms, None);
-    }
-
-    #[test]
-    fn throttled_error_preserves_the_safe_retry_delay() {
-        let public = PublicAuthError::from(AuthError::Throttled {
-            retry_after_ms: 2_000,
-        });
-
-        assert_eq!(public.code, "throttled");
-        assert_eq!(public.retry_after_ms, Some(2_000));
-    }
-
-    #[test]
-    fn password_change_public_error_serializes_password_too_short_safely() {
-        let public = PublicAuthError::from(AuthError::PasswordTooShort);
-        let serialized = serde_json::to_value(public).unwrap();
-
-        assert_eq!(serialized["code"], "password-too-short");
-        assert_eq!(serialized["message"], "Use at least 12 characters.");
-        assert!(serialized.get("retryAfterMs").is_none());
-    }
-
-    #[test]
-    fn password_change_public_error_serializes_invalid_credentials_safely() {
-        let public = PublicAuthError::from(AuthError::InvalidCredentials);
-        let serialized = serde_json::to_value(public).unwrap();
-
-        assert_eq!(serialized["code"], "invalid-credentials");
-        assert_eq!(serialized["message"], "The master password is incorrect.");
-        assert!(serialized.get("retryAfterMs").is_none());
-    }
-
-    #[test]
-    fn password_change_public_error_serializes_unauthorized_safely() {
-        let public = PublicAuthError::from(AuthError::Unauthorized);
-        let serialized = serde_json::to_value(public).unwrap();
-
-        assert_eq!(serialized["code"], "unauthorized");
-        assert_eq!(serialized["message"], "KeyNest is locked.");
-        assert!(serialized.get("retryAfterMs").is_none());
-    }
-
-    #[test]
-    fn reset_confirmation_public_error_names_the_exact_required_phrase() {
-        let public = PublicAuthError::from(AuthError::InvalidResetConfirmation);
-
-        assert_eq!(public.code, "invalid-reset-confirmation");
-        assert_eq!(public.message, "Type RESET KEYNEST exactly to confirm.");
-    }
-
-    #[test]
-    fn create_and_unlock_arm_only_after_success() {
-        let fixture = CommandFixture::new();
-        assert_eq!(
-            create_master_password_and_arm("too short", &fixture.auth, &fixture.auto_lock),
-            Err(AuthError::PasswordTooShort)
-        );
-        assert!(!fixture.auto_lock.is_armed_for_test());
-        assert_eq!(
-            create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock),
-            Ok(AuthStatus::Unlocked)
-        );
-        assert!(fixture.auto_lock.is_armed_for_test());
-
-        fixture.auto_lock.lock_now().unwrap();
-        assert!(!fixture.auto_lock.is_armed_for_test());
-        assert_eq!(
-            unlock_and_arm("wrong password", &fixture.auth, &fixture.auto_lock),
-            Err(AuthError::InvalidCredentials)
-        );
-        assert!(!fixture.auto_lock.is_armed_for_test());
-        assert_eq!(
-            unlock_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock),
-            Ok(AuthStatus::Unlocked)
-        );
-        assert!(fixture.auto_lock.is_armed_for_test());
-    }
-
-    #[test]
-    fn reset_disarms_only_after_success_including_storage_failure() {
-        let fixture = CommandFixture::new();
-        create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock).unwrap();
-
-        assert_eq!(
-            reset_and_disarm("RESET", &fixture.auth, &fixture.auto_lock),
-            Err(AuthError::InvalidResetConfirmation)
-        );
-        assert!(fixture.auto_lock.is_armed_for_test());
-
-        std::fs::create_dir(fixture.temp.path().join("vault.enc")).unwrap();
-        assert_eq!(
-            reset_and_disarm("RESET KEYNEST", &fixture.auth, &fixture.auto_lock),
-            Err(AuthError::LocalDataFailure)
-        );
-        assert!(fixture.auto_lock.is_armed_for_test());
-
-        std::fs::remove_dir(fixture.temp.path().join("vault.enc")).unwrap();
-        assert_eq!(
-            reset_and_disarm("RESET KEYNEST", &fixture.auth, &fixture.auto_lock),
-            Ok(AuthStatus::SetupRequired)
-        );
-        assert!(!fixture.auto_lock.is_armed_for_test());
-    }
-
-    #[test]
-    fn record_activity_requires_unlocked_and_moves_only_an_authorized_deadline() {
-        let fixture = CommandFixture::new();
-        assert_eq!(
-            record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock),
-            Err(AuthError::Unauthorized)
-        );
-        assert!(!fixture.auto_lock.is_armed_for_test());
-
-        create_master_password_and_arm(PASSWORD, &fixture.auth, &fixture.auto_lock).unwrap();
-        let old_activity = Instant::now() - Duration::from_secs(60);
-        fixture.auto_lock.arm_at_for_test(old_activity);
-        record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock).unwrap();
-        assert!(!fixture
-            .auto_lock
-            .expire_at_for_test(old_activity + Duration::from_secs(300)));
-
-        fixture.auto_lock.lock_now().unwrap();
-        assert_eq!(
-            record_activity_if_unlocked(&fixture.auth, &fixture.auto_lock),
-            Err(AuthError::Unauthorized)
-        );
-        assert!(!fixture.auto_lock.is_armed_for_test());
     }
 
     #[test]
