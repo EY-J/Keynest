@@ -1,9 +1,11 @@
 mod security;
+mod settings;
 
 use std::sync::Arc;
 
 use security::{AuthError, AuthService, AuthStatus, KdfParams, OsEntropy, ProfileStore};
 use serde::Serialize;
+use settings::{SettingsService, SettingsStore};
 use tauri::{Manager, State};
 use zeroize::Zeroize;
 
@@ -134,6 +136,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
+            let settings_store = SettingsStore::new(app_data_dir.clone());
+            app.manage(SettingsService::load(settings_store)?);
             let kdf_params = KdfParams::production();
             let store = ProfileStore::new(app_data_dir, kdf_params);
             app.manage(AuthService::load(store, kdf_params, Arc::new(OsEntropy)));
