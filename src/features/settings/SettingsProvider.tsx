@@ -46,53 +46,98 @@ export default function SettingsProvider({ children }: SettingsProviderProps) {
   const [settings, setSettings] = useState<SettingsSnapshot>(DEFAULT_SETTINGS);
   const [hasLoaded, setHasLoaded] = useState(false);
   const isMounted = useRef(false);
-  const requestGeneration = useRef(0);
+  const reloadGeneration = useRef(0);
+  const mutationGeneration = useRef(0);
+  const committedMutationGeneration = useRef(0);
 
-  const beginRequest = useCallback(() => {
-    requestGeneration.current += 1;
-    return requestGeneration.current;
+  const beginReload = useCallback(() => {
+    reloadGeneration.current += 1;
+    return reloadGeneration.current;
   }, []);
 
-  const isCurrentRequest = useCallback((generation: number) => {
-    return isMounted.current && requestGeneration.current === generation;
+  const beginMutation = useCallback(() => {
+    mutationGeneration.current += 1;
+    return mutationGeneration.current;
+  }, []);
+
+  const isCurrentReload = useCallback(
+    (
+      generation: number,
+      mutationsAtStart: number,
+      committedMutationsAtStart: number,
+    ) => {
+      return (
+        isMounted.current &&
+        reloadGeneration.current === generation &&
+        mutationGeneration.current === mutationsAtStart &&
+        committedMutationGeneration.current === committedMutationsAtStart
+      );
+    },
+    [],
+  );
+
+  const isCurrentMutation = useCallback((generation: number) => {
+    return isMounted.current && mutationGeneration.current === generation;
   }, []);
 
   const updateSettings = useCallback(
     async (request: () => Promise<SettingsSnapshot>) => {
-      const generation = beginRequest();
+      const generation = beginMutation();
       const nextSettings = await request();
-      if (isCurrentRequest(generation)) {
+      if (isCurrentMutation(generation)) {
+        committedMutationGeneration.current = generation;
         setSettings(nextSettings);
       }
     },
-    [beginRequest, isCurrentRequest],
+    [beginMutation, isCurrentMutation],
   );
 
   const reload = useCallback(async () => {
-    const generation = beginRequest();
+    const generation = beginReload();
+    const mutationsAtStart = mutationGeneration.current;
+    const committedMutationsAtStart = committedMutationGeneration.current;
     try {
       const nextSettings = await settingsClient.getSettings();
-      if (isCurrentRequest(generation)) {
+      if (
+        isCurrentReload(
+          generation,
+          mutationsAtStart,
+          committedMutationsAtStart,
+        )
+      ) {
         setSettings(nextSettings);
       }
     } catch {
-      if (isCurrentRequest(generation)) {
+      if (
+        isCurrentReload(
+          generation,
+          mutationsAtStart,
+          committedMutationsAtStart,
+        )
+      ) {
         setSettings({ ...DEFAULT_SETTINGS, warning: LOAD_FAILURE_WARNING });
       }
     } finally {
-      if (isCurrentRequest(generation)) {
+      if (
+        isCurrentReload(
+          generation,
+          mutationsAtStart,
+          committedMutationsAtStart,
+        )
+      ) {
         setHasLoaded(true);
       }
     }
-  }, [beginRequest, isCurrentRequest]);
+  }, [beginReload, isCurrentReload]);
 
   useEffect(() => {
     isMounted.current = true;
     return () => {
       isMounted.current = false;
-      beginRequest();
+      beginReload();
+      beginMutation();
     };
-  }, [beginRequest]);
+  }, [beginMutation, beginReload]);
 
   useEffect(() => {
     void reload();
@@ -158,11 +203,12 @@ export default function SettingsProvider({ children }: SettingsProviderProps) {
   );
 
   const resetToDefaults = useCallback(() => {
-    beginRequest();
+    beginMutation();
+    beginReload();
     if (isMounted.current) {
       setSettings(DEFAULT_SETTINGS);
     }
-  }, [beginRequest]);
+  }, [beginMutation, beginReload]);
 
   const contextValue: SettingsContextValue = {
     settings,

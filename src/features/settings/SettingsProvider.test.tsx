@@ -416,6 +416,90 @@ describe("SettingsProvider", () => {
     expect(screen.getByTestId("theme")).toHaveTextContent("system");
   });
 
+  it("keeps an earlier mutation when a later reload returns an older snapshot", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SettingsProvider>
+        <SettingsProbe />
+      </SettingsProvider>,
+    );
+
+    await screen.findByTestId("theme");
+    const pendingMutation = deferred<Awaited<ReturnType<typeof setTheme>>>();
+    const pendingReload = deferred<Awaited<ReturnType<typeof getSettings>>>();
+    setTheme.mockReturnValueOnce(pendingMutation.promise);
+    getSettings.mockReturnValueOnce(pendingReload.promise);
+
+    await user.click(screen.getByRole("button", { name: "Set light" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    await act(async () => {
+      pendingReload.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "system",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("theme")).toHaveTextContent("system");
+
+    await act(async () => {
+      pendingMutation.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "light",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+  });
+
+  it("does not let a reload overwrite a mutation that confirms before it", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SettingsProvider>
+        <SettingsProbe />
+      </SettingsProvider>,
+    );
+
+    await screen.findByTestId("theme");
+    const pendingMutation = deferred<Awaited<ReturnType<typeof setTheme>>>();
+    const pendingReload = deferred<Awaited<ReturnType<typeof getSettings>>>();
+    setTheme.mockReturnValueOnce(pendingMutation.promise);
+    getSettings.mockReturnValueOnce(pendingReload.promise);
+
+    await user.click(screen.getByRole("button", { name: "Set light" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    await act(async () => {
+      pendingMutation.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "light",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+
+    await act(async () => {
+      pendingReload.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "system",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+  });
+
   it("prevents an outstanding mutation from overwriting reset defaults", async () => {
     const user = userEvent.setup();
 
