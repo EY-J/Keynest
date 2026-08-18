@@ -15,7 +15,9 @@ vi.mock("../authClient", () => ({
     createMasterPassword: vi.fn(),
     unlock: vi.fn(),
     lock: vi.fn(),
+    changeMasterPassword: vi.fn(),
     resetKeynest: vi.fn(),
+    resetKeynestAuthenticated: vi.fn(),
   },
 }));
 
@@ -26,6 +28,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 describe("AuthGate", () => {
   const getStatus = vi.mocked(authClient.getStatus);
   const lock = vi.mocked(authClient.lock);
+  const resetKeynestAuthenticated = vi.mocked(
+    authClient.resetKeynestAuthenticated,
+  );
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -170,5 +175,39 @@ describe("AuthGate", () => {
       await screen.findByRole("heading", { name: "Welcome back" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Protected lock" })).not.toBeInTheDocument();
+  });
+
+  it("resets authenticated content into first-time setup only after Rust confirms setup is required", async () => {
+    const user = userEvent.setup();
+    const onResetComplete = vi.fn();
+    getStatus.mockResolvedValue("unlocked");
+    resetKeynestAuthenticated.mockResolvedValue("setup-required");
+    render(
+      <AuthGate onResetComplete={onResetComplete}>
+        {({ resetAuthenticated }) => (
+          <button
+            onClick={() =>
+              void resetAuthenticated("current password", "RESET KEYNEST")
+            }
+          >
+            Protected reset
+          </button>
+        )}
+      </AuthGate>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Protected reset" }));
+
+    expect(resetKeynestAuthenticated).toHaveBeenCalledWith(
+      "current password",
+      "RESET KEYNEST",
+    );
+    expect(onResetComplete).toHaveBeenCalledOnce();
+    expect(
+      await screen.findByRole("heading", {
+        name: "Create your master password",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Protected reset" })).not.toBeInTheDocument();
   });
 });

@@ -27,6 +27,7 @@ describe("AuthenticatedShell", () => {
       <AuthenticatedShell
         onLockKeynest={vi.fn().mockResolvedValue(undefined)}
         onOpenPasswordVault={vi.fn()}
+        onResetAuthenticated={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 
@@ -63,6 +64,7 @@ describe("AuthenticatedShell", () => {
       <AuthenticatedShell
         onLockKeynest={vi.fn().mockResolvedValue(undefined)}
         onOpenPasswordVault={vi.fn()}
+        onResetAuthenticated={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 
@@ -89,6 +91,7 @@ describe("AuthenticatedShell", () => {
       <AuthenticatedShell
         onLockKeynest={onLockKeynest}
         onOpenPasswordVault={onOpenPasswordVault}
+        onResetAuthenticated={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 
@@ -120,6 +123,7 @@ describe("AuthenticatedShell", () => {
       <AuthenticatedShell
         onLockKeynest={vi.fn().mockResolvedValue(undefined)}
         onOpenPasswordVault={vi.fn()}
+        onResetAuthenticated={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 

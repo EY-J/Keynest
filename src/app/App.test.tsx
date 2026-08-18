@@ -15,7 +15,9 @@ vi.mock("../features/auth/authClient", () => ({
     createMasterPassword: vi.fn(),
     unlock: vi.fn(),
     lock: vi.fn(),
+    changeMasterPassword: vi.fn(),
     resetKeynest: vi.fn(),
+    resetKeynestAuthenticated: vi.fn(),
   },
 }));
 

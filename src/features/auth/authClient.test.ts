@@ -19,13 +19,35 @@ describe("authClient", () => {
     await authClient.createMasterPassword("a secure master password");
     await authClient.unlock("a secure master password");
     await authClient.lock();
-    await authClient.resetKeynest("RESET");
+    await authClient.changeMasterPassword(
+      "current password value",
+      "new password value",
+    );
+    await authClient.resetKeynest("RESET KEYNEST");
+    await authClient.resetKeynestAuthenticated(
+      "current password value",
+      "RESET KEYNEST",
+    );
 
     expect(invokeMock.mock.calls).toEqual([
       ["create_master_password", { password: "a secure master password" }],
       ["unlock", { password: "a secure master password" }],
       ["lock"],
-      ["reset_keynest", { confirmation: "RESET" }],
+      [
+        "change_master_password",
+        {
+          currentPassword: "current password value",
+          newPassword: "new password value",
+        },
+      ],
+      ["reset_keynest", { confirmation: "RESET KEYNEST" }],
+      [
+        "reset_keynest_authenticated",
+        {
+          currentPassword: "current password value",
+          confirmation: "RESET KEYNEST",
+        },
+      ],
     ]);
   });
 

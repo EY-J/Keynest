@@ -10,11 +10,16 @@ export type AuthenticatedDestination = "home" | "settings";
 type AuthenticatedShellProps = {
   onOpenPasswordVault: () => void;
   onLockKeynest: () => Promise<void>;
+  onResetAuthenticated: (
+    currentPassword: string,
+    confirmation: "RESET KEYNEST",
+  ) => Promise<void>;
 };
 
 export default function AuthenticatedShell({
   onOpenPasswordVault,
   onLockKeynest,
+  onResetAuthenticated,
 }: AuthenticatedShellProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeDestination, setActiveDestination] =
@@ -74,7 +79,7 @@ export default function AuthenticatedShell({
       {activeDestination === "home" ? (
         <HomePage onOpenPasswordVault={onOpenPasswordVault} />
       ) : (
-        <SettingsPage />
+        <SettingsPage onResetAuthenticated={onResetAuthenticated} />
       )}
     </div>
   );

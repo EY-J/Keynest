@@ -34,7 +34,16 @@ const CATEGORIES: Array<{
   },
 ];
 
-export default function SettingsPage() {
+type SettingsPageProps = {
+  onResetAuthenticated: (
+    currentPassword: string,
+    confirmation: "RESET KEYNEST",
+  ) => Promise<void>;
+};
+
+export default function SettingsPage({
+  onResetAuthenticated,
+}: SettingsPageProps) {
   const [activeCategory, setActiveCategory] =
     useState<SettingsCategory>("security");
   const category = CATEGORIES.find(({ id }) => id === activeCategory)!;
@@ -75,7 +84,9 @@ export default function SettingsPage() {
         >
           <h2>{category.label}</h2>
           <p>{category.description}</p>
-          {category.id === "security" ? <SecuritySettings /> : null}
+          {category.id === "security" ? (
+            <SecuritySettings onResetAuthenticated={onResetAuthenticated} />
+          ) : null}
         </section>
       </section>
     </main>

@@ -16,7 +16,7 @@ vi.mock("../settingsClient", () => ({
 function renderSecuritySettings() {
   return render(
     <SettingsProvider>
-      <SecuritySettings />
+      <SecuritySettings onResetAuthenticated={vi.fn().mockResolvedValue(undefined)} />
     </SettingsProvider>,
   );
 }

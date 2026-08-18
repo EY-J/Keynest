@@ -58,20 +58,26 @@ describe("UnlockScreen", () => {
 });
 
 describe("ResetDialog", () => {
-  it("requires exact RESET before deleting local data", async () => {
+  it("requires exact RESET KEYNEST before deleting local data", async () => {
     const user = userEvent.setup();
     const onReset = vi.fn().mockResolvedValue(undefined);
     render(<ResetDialog isOpen onClose={vi.fn()} onReset={onReset} />);
     const resetButton = screen.getByRole("button", { name: "Reset KeyNest" });
 
     expect(resetButton).toBeDisabled();
-    await user.type(screen.getByLabelText("Type RESET to confirm"), "reset");
+    await user.type(
+      screen.getByLabelText("Type RESET KEYNEST to confirm"),
+      "reset keynest",
+    );
     expect(resetButton).toBeDisabled();
-    await user.clear(screen.getByLabelText("Type RESET to confirm"));
-    await user.type(screen.getByLabelText("Type RESET to confirm"), "RESET");
+    await user.clear(screen.getByLabelText("Type RESET KEYNEST to confirm"));
+    await user.type(
+      screen.getByLabelText("Type RESET KEYNEST to confirm"),
+      "RESET KEYNEST",
+    );
     expect(resetButton).toBeEnabled();
     await user.click(resetButton);
 
-    expect(onReset).toHaveBeenCalledWith("RESET");
+    expect(onReset).toHaveBeenCalledWith("RESET KEYNEST");
   });
 });

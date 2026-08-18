@@ -9,7 +9,7 @@ vi.mock("../features/settings/components/SecuritySettings", () => ({
 
 describe("SettingsPage", () => {
   it("starts on Security and exposes the supported settings categories", () => {
-    render(<SettingsPage />);
+    render(<SettingsPage onResetAuthenticated={vi.fn().mockResolvedValue(undefined)} />);
 
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Security" })).toHaveAttribute(
@@ -26,7 +26,7 @@ describe("SettingsPage", () => {
 
   it("selects About and presents its category panel", async () => {
     const user = userEvent.setup();
-    render(<SettingsPage />);
+    render(<SettingsPage onResetAuthenticated={vi.fn().mockResolvedValue(undefined)} />);
 
     await user.click(screen.getByRole("tab", { name: "About" }));
 

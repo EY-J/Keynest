@@ -10,10 +10,17 @@ import UnlockScreen from "./UnlockScreen";
 type GateState = "checking" | AuthStatus;
 
 type AuthGateProps = {
-  children: (controls: { lock: () => Promise<void> }) => ReactNode;
+  children: (controls: {
+    lock: () => Promise<void>;
+    resetAuthenticated: (
+      currentPassword: string,
+      confirmation: "RESET KEYNEST",
+    ) => Promise<void>;
+  }) => ReactNode;
+  onResetComplete?: () => void;
 };
 
-export default function AuthGate({ children }: AuthGateProps) {
+export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
   const [status, setStatus] = useState<GateState>("checking");
   const [lockError, setLockError] = useState("");
   const [hasLockListener, setHasLockListener] = useState(false);
@@ -108,6 +115,27 @@ export default function AuthGate({ children }: AuthGateProps) {
         "KeyNest could not confirm that local data was reset.",
       );
     }
+    onResetComplete?.();
+    setHasLockListener(false);
+    setStatus("setup-required");
+  }
+
+  async function resetAuthenticated(
+    currentPassword: string,
+    confirmation: "RESET KEYNEST",
+  ) {
+    const nextStatus = await authClient.resetKeynestAuthenticated(
+      currentPassword,
+      confirmation,
+    );
+    if (nextStatus !== "setup-required") {
+      throw new AuthClientError(
+        "unexpected-status",
+        "KeyNest could not confirm that local data was reset.",
+      );
+    }
+    onResetComplete?.();
+    setHasLockListener(false);
     setStatus("setup-required");
   }
 
@@ -176,7 +204,7 @@ export default function AuthGate({ children }: AuthGateProps) {
               {lockError}
             </div>
           ) : null}
-          {children({ lock })}
+          {children({ lock, resetAuthenticated })}
         </>
       );
   }

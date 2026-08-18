@@ -1,12 +1,23 @@
 import { useRef, useState } from "react";
 import { useSettings } from "../SettingsProvider";
 import type { AutoLockSeconds, ClipboardClearSeconds } from "../types";
+import AuthenticatedResetDialog from "./AuthenticatedResetDialog";
+import ChangeMasterPasswordForm from "./ChangeMasterPasswordForm";
 
 const SAVE_ERROR = "KeyNest could not save this security preference.";
 
 type SecurityControl = "auto-lock" | "clipboard";
 
-export default function SecuritySettings() {
+type SecuritySettingsProps = {
+  onResetAuthenticated: (
+    currentPassword: string,
+    confirmation: "RESET KEYNEST",
+  ) => Promise<void>;
+};
+
+export default function SecuritySettings({
+  onResetAuthenticated,
+}: SecuritySettingsProps) {
   const {
     settings,
     setAutoLockSeconds,
@@ -24,6 +35,7 @@ export default function SecuritySettings() {
     "auto-lock": "",
     clipboard: "",
   });
+  const [isResetOpen, setIsResetOpen] = useState(false);
 
   async function save(
     control: SecurityControl,
@@ -99,6 +111,26 @@ export default function SecuritySettings() {
         <p>Lock when Windows sleeps</p>
         <p>Enabled</p>
       </div>
+
+      <ChangeMasterPasswordForm />
+
+      <section className="security-reset" aria-labelledby="reset-keynest-settings-title">
+        <h3 id="reset-keynest-settings-title">Reset KeyNest</h3>
+        <p>Permanently erase this device&apos;s encrypted KeyNest data.</p>
+        <button
+          className="danger-button"
+          type="button"
+          onClick={() => setIsResetOpen(true)}
+        >
+          Reset KeyNest
+        </button>
+      </section>
+
+      <AuthenticatedResetDialog
+        isOpen={isResetOpen}
+        onClose={() => setIsResetOpen(false)}
+        onReset={onResetAuthenticated}
+      />
     </div>
   );
 }
