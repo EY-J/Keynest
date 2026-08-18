@@ -5,6 +5,10 @@ import { authClient } from "../features/auth/authClient";
 import { settingsClient } from "../features/settings/settingsClient";
 import App from "./App";
 
+const { listenMock } = vi.hoisted(() => ({
+  listenMock: vi.fn(),
+}));
+
 vi.mock("../features/auth/authClient", () => ({
   authClient: {
     getStatus: vi.fn(),
@@ -27,6 +31,10 @@ vi.mock("../features/settings/settingsClient", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: listenMock,
+}));
+
 describe("App master-password integration", () => {
   const getStatus = vi.mocked(authClient.getStatus);
   const lock = vi.mocked(authClient.lock);
@@ -34,6 +42,8 @@ describe("App master-password integration", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    listenMock.mockResolvedValue(vi.fn());
+    vi.mocked(settingsClient.recordActivity).mockResolvedValue(undefined);
     getStatus.mockResolvedValue("unlocked");
     lock.mockResolvedValue("locked");
     getSettings.mockResolvedValue({

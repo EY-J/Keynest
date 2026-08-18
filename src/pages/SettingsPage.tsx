@@ -1,4 +1,5 @@
 import { useState } from "react";
+import SecuritySettings from "../features/settings/components/SecuritySettings";
 
 export type SettingsCategory =
   | "security"
@@ -74,6 +75,7 @@ export default function SettingsPage() {
         >
           <h2>{category.label}</h2>
           <p>{category.description}</p>
+          {category.id === "security" ? <SecuritySettings /> : null}
         </section>
       </section>
     </main>

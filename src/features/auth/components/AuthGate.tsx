@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { authClient } from "../authClient";
 import { AuthClientError, type AuthStatus } from "../types";
 import AuthLayout from "./AuthLayout";
@@ -15,12 +16,18 @@ type AuthGateProps = {
 export default function AuthGate({ children }: AuthGateProps) {
   const [status, setStatus] = useState<GateState>("checking");
   const [lockError, setLockError] = useState("");
+  const [hasLockListener, setHasLockListener] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     setStatus("checking");
     try {
       const nextStatus = await authClient.getStatus();
-      setStatus(isAuthStatus(nextStatus) ? nextStatus : "data-error");
+      if (isAuthStatus(nextStatus)) {
+        setHasLockListener(false);
+        setStatus(nextStatus);
+      } else {
+        setStatus("data-error");
+      }
     } catch {
       setStatus("data-error");
     }
@@ -29,6 +36,53 @@ export default function AuthGate({ children }: AuthGateProps) {
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    if (status !== "unlocked") {
+      return;
+    }
+
+    let isCurrent = true;
+    let unlisten: (() => void) | undefined;
+    setHasLockListener(false);
+
+    void listen("keynest://locked", () => {
+      if (!isCurrent) {
+        return;
+      }
+      setLockError("");
+      setStatus("locked");
+    })
+      .then((nextUnlisten) => {
+        if (!isCurrent) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+        setHasLockListener(true);
+      })
+      .catch(async () => {
+        if (!isCurrent) {
+          return;
+        }
+        try {
+          const nextStatus = await authClient.lock();
+          if (!isCurrent) {
+            return;
+          }
+          setStatus(nextStatus === "locked" ? "locked" : "data-error");
+        } catch {
+          if (isCurrent) {
+            setStatus("data-error");
+          }
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+      unlisten?.();
+    };
+  }, [status]);
 
   async function reset(confirmation: string) {
     const nextStatus = await authClient.resetKeynest(confirmation);
@@ -50,12 +104,8 @@ export default function AuthGate({ children }: AuthGateProps) {
         return;
       }
       setStatus("locked");
-    } catch (error) {
-      setLockError(
-        error instanceof Error
-          ? error.message
-          : "KeyNest could not confirm that the vault was locked.",
-      );
+    } catch {
+      setLockError("KeyNest could not confirm that the vault was locked.");
     }
   }
 
@@ -71,17 +121,38 @@ export default function AuthGate({ children }: AuthGateProps) {
         </AuthLayout>
       );
     case "setup-required":
-      return <SetupScreen onCreated={() => setStatus("unlocked")} />;
+      return (
+        <SetupScreen
+          onCreated={() => {
+            setHasLockListener(false);
+            setStatus("unlocked");
+          }}
+        />
+      );
     case "locked":
       return (
         <UnlockScreen
-          onUnlocked={() => setStatus("unlocked")}
+          onUnlocked={() => {
+            setHasLockListener(false);
+            setStatus("unlocked");
+          }}
           onReset={reset}
         />
       );
     case "data-error":
       return <DataErrorScreen onRetry={refreshStatus} onReset={reset} />;
     case "unlocked":
+      if (!hasLockListener) {
+        return (
+          <AuthLayout
+            eyebrow="KEYNEST SECURITY"
+            title="Securing your nestâ€¦"
+            description="Connecting secure lock controls on this device."
+          >
+            <div className="auth-loading" aria-label="Checking security status" />
+          </AuthLayout>
+        );
+      }
       return (
         <>
           {lockError ? (
