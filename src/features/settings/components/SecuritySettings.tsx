@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useSettings } from "../SettingsProvider";
 import type { AutoLockSeconds, ClipboardClearSeconds } from "../types";
 
 const SAVE_ERROR = "KeyNest could not save this security preference.";
 
-type SavingControl = "auto-lock" | "clipboard" | null;
+type SecurityControl = "auto-lock" | "clipboard";
 
 export default function SecuritySettings() {
   const {
@@ -12,34 +12,46 @@ export default function SecuritySettings() {
     setAutoLockSeconds,
     setClipboardClearSeconds,
   } = useSettings();
-  const [savingControl, setSavingControl] = useState<SavingControl>(null);
+  const requestIds = useRef<Record<SecurityControl, number>>({
+    "auto-lock": 0,
+    clipboard: 0,
+  });
+  const [isSaving, setIsSaving] = useState<Record<SecurityControl, boolean>>({
+    "auto-lock": false,
+    clipboard: false,
+  });
   const [errors, setErrors] = useState({
     "auto-lock": "",
     clipboard: "",
   });
 
-  async function saveAutoLock(value: AutoLockSeconds) {
-    setErrors((current) => ({ ...current, "auto-lock": "" }));
-    setSavingControl("auto-lock");
+  async function save(
+    control: SecurityControl,
+    request: () => Promise<void>,
+  ) {
+    const requestId = requestIds.current[control] + 1;
+    requestIds.current[control] = requestId;
+    setErrors((current) => ({ ...current, [control]: "" }));
+    setIsSaving((current) => ({ ...current, [control]: true }));
     try {
-      await setAutoLockSeconds(value);
+      await request();
     } catch {
-      setErrors((current) => ({ ...current, "auto-lock": SAVE_ERROR }));
+      if (requestIds.current[control] === requestId) {
+        setErrors((current) => ({ ...current, [control]: SAVE_ERROR }));
+      }
     } finally {
-      setSavingControl(null);
+      if (requestIds.current[control] === requestId) {
+        setIsSaving((current) => ({ ...current, [control]: false }));
+      }
     }
   }
 
+  async function saveAutoLock(value: AutoLockSeconds) {
+    await save("auto-lock", () => setAutoLockSeconds(value));
+  }
+
   async function saveClipboardClear(value: ClipboardClearSeconds) {
-    setErrors((current) => ({ ...current, clipboard: "" }));
-    setSavingControl("clipboard");
-    try {
-      await setClipboardClearSeconds(value);
-    } catch {
-      setErrors((current) => ({ ...current, clipboard: SAVE_ERROR }));
-    } finally {
-      setSavingControl(null);
-    }
+    await save("clipboard", () => setClipboardClearSeconds(value));
   }
 
   return (
@@ -49,7 +61,7 @@ export default function SecuritySettings() {
         <select
           id="auto-lock-seconds"
           value={settings.autoLockSeconds}
-          disabled={savingControl === "auto-lock"}
+          disabled={isSaving["auto-lock"]}
           onChange={(event) =>
             void saveAutoLock(Number(event.target.value) as AutoLockSeconds)
           }
@@ -69,7 +81,7 @@ export default function SecuritySettings() {
         <select
           id="clipboard-clear-seconds"
           value={settings.clipboardClearSeconds}
-          disabled={savingControl === "clipboard"}
+          disabled={isSaving.clipboard}
           onChange={(event) =>
             void saveClipboardClear(
               Number(event.target.value) as ClipboardClearSeconds,

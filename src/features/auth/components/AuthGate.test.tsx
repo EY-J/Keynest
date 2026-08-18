@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "../authClient";
@@ -28,7 +28,7 @@ describe("AuthGate", () => {
   const lock = vi.mocked(authClient.lock);
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     listenMock.mockResolvedValue(vi.fn());
   });
 
@@ -57,6 +57,34 @@ describe("AuthGate", () => {
     render(<AuthGate>{() => <div>Protected home</div>}</AuthGate>);
 
     expect(await screen.findByText("Protected home")).toBeInTheDocument();
+  });
+
+  it("never mounts protected content when Rust locks while listener registration is pending", async () => {
+    let resolveListen!: (unlisten: () => void) => void;
+    const unlisten = vi.fn();
+    getStatus
+      .mockResolvedValueOnce("unlocked")
+      .mockResolvedValueOnce("locked");
+    listenMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveListen = resolve;
+      }),
+    );
+
+    render(<AuthGate>{() => <div>Protected home</div>}</AuthGate>);
+
+    await waitFor(() => expect(listenMock).toHaveBeenCalledOnce());
+    expect(screen.queryByText("Protected home")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveListen(unlisten);
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "Welcome back" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Protected home")).not.toBeInTheDocument();
+    expect(unlisten).toHaveBeenCalledOnce();
   });
 
   it("removes protected content when the backend emits the locked event and cleans up its listener", async () => {

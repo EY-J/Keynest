@@ -111,4 +111,88 @@ describe("SecuritySettings", () => {
       );
     });
   });
+
+  it("keeps each concurrent security mutation pending and clears obsolete failure feedback", async () => {
+    const user = userEvent.setup();
+    let rejectFirstAutoLock!: (reason?: unknown) => void;
+    let resolveSecondAutoLock!: (value: {
+      autoLockSeconds: 60;
+      clipboardClearSeconds: 30;
+      theme: "system";
+      launchAtStartup: false;
+    }) => void;
+    let resolveClipboardClear!: (value: {
+      autoLockSeconds: 60;
+      clipboardClearSeconds: 60;
+      theme: "system";
+      launchAtStartup: false;
+    }) => void;
+    setAutoLockSeconds
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectFirstAutoLock = reject;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecondAutoLock = resolve;
+        }),
+      );
+    setClipboardClearSeconds.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveClipboardClear = resolve;
+      }),
+    );
+    renderSecuritySettings();
+
+    const autoLock = await screen.findByLabelText(
+      "Lock KeyNest after inactivity",
+    );
+    const clipboardClear = screen.getByLabelText("Clear clipboard after");
+    await user.selectOptions(autoLock, "900");
+    await user.selectOptions(clipboardClear, "60");
+
+    expect(autoLock).toBeDisabled();
+    expect(clipboardClear).toBeDisabled();
+    expect(setAutoLockSeconds).toHaveBeenCalledTimes(1);
+
+    await user.selectOptions(autoLock, "60");
+    expect(setAutoLockSeconds).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectFirstAutoLock(new Error("stale auto-lock failure"));
+    });
+    expect(clipboardClear).toBeDisabled();
+    expect(autoLock).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "KeyNest could not save this security preference.",
+    );
+
+    await user.selectOptions(autoLock, "60");
+    expect(autoLock).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSecondAutoLock({
+        autoLockSeconds: 60,
+        clipboardClearSeconds: 30,
+        theme: "system",
+        launchAtStartup: false,
+      });
+    });
+    await waitFor(() => expect(autoLock).toHaveValue("60"));
+    expect(autoLock).toBeEnabled();
+    expect(clipboardClear).toBeDisabled();
+
+    await act(async () => {
+      resolveClipboardClear({
+        autoLockSeconds: 60,
+        clipboardClearSeconds: 60,
+        theme: "system",
+        launchAtStartup: false,
+      });
+    });
+    expect(clipboardClear).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

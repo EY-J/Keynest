@@ -59,7 +59,23 @@ export default function AuthGate({ children }: AuthGateProps) {
           return;
         }
         unlisten = nextUnlisten;
-        setHasLockListener(true);
+        return authClient.getStatus().then(
+          (nextStatus) => {
+            if (!isCurrent) {
+              return;
+            }
+            if (nextStatus === "unlocked") {
+              setHasLockListener(true);
+              return;
+            }
+            setStatus(isAuthStatus(nextStatus) ? nextStatus : "data-error");
+          },
+          () => {
+            if (isCurrent) {
+              setStatus("data-error");
+            }
+          },
+        );
       })
       .catch(async () => {
         if (!isCurrent) {
