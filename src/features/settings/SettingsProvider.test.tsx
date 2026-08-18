@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsProvider, { useSettings } from "./SettingsProvider";
@@ -20,22 +21,24 @@ type MediaChangeListener = (event: MediaQueryListEvent) => void;
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
 
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
-function installColorScheme(initiallyDark = false) {
+type MediaQueryListenerApi = "both" | "legacy" | "modern";
+
+function installColorScheme(
+  initiallyDark = false,
+  listenerApi: MediaQueryListenerApi = "both",
+) {
   let isDark = initiallyDark;
   const listeners = new Set<MediaChangeListener>();
-  const query = {
-    get matches() {
-      return isDark;
-    },
-    media: "(prefers-color-scheme: dark)",
-    onchange: null,
+  const modern = {
     addEventListener: vi.fn((type: string, listener: MediaChangeListener) => {
       if (type === "change") listeners.add(listener);
     }),
@@ -44,14 +47,31 @@ function installColorScheme(initiallyDark = false) {
         if (type === "change") listeners.delete(listener);
       },
     ),
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
+  };
+  const legacy = {
+    addListener: vi.fn((listener: MediaChangeListener) => {
+      listeners.add(listener);
+    }),
+    removeListener: vi.fn((listener: MediaChangeListener) => {
+      listeners.delete(listener);
+    }),
+  };
+  const query = {
+    get matches() {
+      return isDark;
+    },
+    media: "(prefers-color-scheme: dark)",
+    onchange: null,
+    ...(listenerApi !== "legacy" ? modern : {}),
+    ...(listenerApi !== "modern" ? legacy : {}),
     dispatchEvent: vi.fn(),
   } as unknown as MediaQueryList;
 
   vi.stubGlobal("matchMedia", vi.fn(() => query));
 
   return {
+    legacy,
+    modern,
     query,
     change(toDark: boolean) {
       isDark = toDark;
@@ -70,6 +90,7 @@ function SettingsProbe() {
     setClipboardClearSeconds,
     setLaunchAtStartup,
     setTheme,
+    reload,
   } = useSettings();
 
   return (
@@ -87,6 +108,7 @@ function SettingsProbe() {
       <button onClick={() => void setTheme("light").catch(() => {})}>
         Set light
       </button>
+      <button onClick={() => void reload()}>Reload</button>
       <button onClick={resetToDefaults}>Reset</button>
     </section>
   );
@@ -166,10 +188,9 @@ describe("SettingsProvider", () => {
     expect(await screen.findByText("Authenticated content")).toBeInTheDocument();
   });
 
-  it("follows Windows color-scheme changes for the System preference", async () => {
-    const media = installColorScheme(true);
-
-    render(
+  it("subscribes, follows, and cleans up with modern MediaQueryList listeners", async () => {
+    const media = installColorScheme(true, "modern");
+    const { unmount } = render(
       <SettingsProvider>
         <SettingsProbe />
       </SettingsProvider>,
@@ -178,6 +199,7 @@ describe("SettingsProvider", () => {
     await screen.findByTestId("theme");
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
     expect(document.documentElement.style.colorScheme).toBe("dark");
+    expect(media.modern.addEventListener).toHaveBeenCalledOnce();
 
     media.change(false);
 
@@ -185,6 +207,32 @@ describe("SettingsProvider", () => {
       expect(document.documentElement).toHaveAttribute("data-theme", "light");
       expect(document.documentElement.style.colorScheme).toBe("light");
     });
+
+    unmount();
+    expect(media.modern.removeEventListener).toHaveBeenCalledOnce();
+  });
+
+  it("subscribes, follows, and cleans up with legacy MediaQueryList listeners", async () => {
+    const media = installColorScheme(true, "legacy");
+    const { unmount } = render(
+      <SettingsProvider>
+        <SettingsProbe />
+      </SettingsProvider>,
+    );
+
+    await screen.findByTestId("theme");
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(media.legacy.addListener).toHaveBeenCalledOnce();
+
+    media.change(false);
+
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute("data-theme", "light");
+      expect(document.documentElement.style.colorScheme).toBe("light");
+    });
+
+    unmount();
+    expect(media.legacy.removeListener).toHaveBeenCalledOnce();
   });
 
   it("uses a deterministic light fallback when matchMedia is unavailable", async () => {
@@ -247,6 +295,156 @@ describe("SettingsProvider", () => {
     await waitFor(() => {
       expect(screen.getByTestId("theme")).toHaveTextContent("light");
     });
+  });
+
+  it("keeps newer settings when an older reload fails after it", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SettingsProvider>
+        <SettingsProbe />
+      </SettingsProvider>,
+    );
+
+    expect(await screen.findByTestId("auto-lock")).toHaveTextContent("900");
+    const firstReload = deferred<Awaited<ReturnType<typeof getSettings>>>();
+    const secondReload = deferred<Awaited<ReturnType<typeof getSettings>>>();
+    getSettings.mockReturnValueOnce(firstReload.promise);
+    getSettings.mockReturnValueOnce(secondReload.promise);
+
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    await act(async () => {
+      secondReload.resolve({
+        autoLockSeconds: 60,
+        clipboardClearSeconds: 10,
+        theme: "light",
+        launchAtStartup: false,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("auto-lock")).toHaveTextContent("60");
+    expect(screen.getByTestId("warning")).toBeEmptyDOMElement();
+
+    await act(async () => {
+      firstReload.reject(new Error("older request failed"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("auto-lock")).toHaveTextContent("60");
+    expect(screen.getByTestId("clipboard-clear")).toHaveTextContent("10");
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+    expect(screen.getByTestId("warning")).toBeEmptyDOMElement();
+  });
+
+  it("ignores a reload that began before StrictMode effect cleanup", async () => {
+    const staleReload = deferred<Awaited<ReturnType<typeof getSettings>>>();
+    getSettings.mockReturnValueOnce(staleReload.promise);
+    getSettings.mockResolvedValueOnce({
+      autoLockSeconds: 60,
+      clipboardClearSeconds: 10,
+      theme: "light",
+      launchAtStartup: false,
+    });
+
+    render(
+      <StrictMode>
+        <SettingsProvider>
+          <SettingsProbe />
+        </SettingsProvider>
+      </StrictMode>,
+    );
+
+    expect(await screen.findByTestId("auto-lock")).toHaveTextContent("60");
+
+    await act(async () => {
+      staleReload.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "system",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("auto-lock")).toHaveTextContent("60");
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+  });
+
+  it("keeps the newest confirmed mutation when older responses arrive later", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SettingsProvider>
+        <SettingsProbe />
+      </SettingsProvider>,
+    );
+
+    await screen.findByTestId("theme");
+    const olderTheme = deferred<Awaited<ReturnType<typeof setTheme>>>();
+    const newerAutoLock = deferred<Awaited<ReturnType<typeof setAutoLockSeconds>>>();
+    setTheme.mockReturnValueOnce(olderTheme.promise);
+    setAutoLockSeconds.mockReturnValueOnce(newerAutoLock.promise);
+
+    await user.click(screen.getByRole("button", { name: "Set light" }));
+    await user.click(screen.getByRole("button", { name: "Set auto lock" }));
+    await act(async () => {
+      newerAutoLock.resolve({
+        autoLockSeconds: 60,
+        clipboardClearSeconds: 60,
+        theme: "system",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("auto-lock")).toHaveTextContent("60");
+    expect(screen.getByTestId("theme")).toHaveTextContent("system");
+
+    await act(async () => {
+      olderTheme.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "light",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("auto-lock")).toHaveTextContent("60");
+    expect(screen.getByTestId("theme")).toHaveTextContent("system");
+  });
+
+  it("prevents an outstanding mutation from overwriting reset defaults", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SettingsProvider>
+        <SettingsProbe />
+      </SettingsProvider>,
+    );
+
+    await screen.findByTestId("theme");
+    const pendingTheme = deferred<Awaited<ReturnType<typeof setTheme>>>();
+    setTheme.mockReturnValueOnce(pendingTheme.promise);
+
+    await user.click(screen.getByRole("button", { name: "Set light" }));
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    await act(async () => {
+      pendingTheme.resolve({
+        autoLockSeconds: 900,
+        clipboardClearSeconds: 60,
+        theme: "light",
+        launchAtStartup: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("auto-lock")).toHaveTextContent("300");
+    expect(screen.getByTestId("clipboard-clear")).toHaveTextContent("30");
+    expect(screen.getByTestId("theme")).toHaveTextContent("system");
+    expect(screen.getByTestId("launch-at-startup")).toHaveTextContent("false");
   });
 
   it("keeps the prior state when a backend mutation rejects", async () => {
@@ -326,17 +524,4 @@ describe("SettingsProvider", () => {
     );
   });
 
-  it("removes the System color-scheme listener when it unmounts", async () => {
-    const media = installColorScheme();
-    const { unmount } = render(
-      <SettingsProvider>
-        <SettingsProbe />
-      </SettingsProvider>,
-    );
-
-    await screen.findByTestId("theme");
-    unmount();
-
-    expect(media.query.removeEventListener).toHaveBeenCalledOnce();
-  });
 });

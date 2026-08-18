@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import AuthLayout from "../auth/components/AuthLayout";
@@ -44,16 +45,54 @@ type SettingsProviderProps = {
 export default function SettingsProvider({ children }: SettingsProviderProps) {
   const [settings, setSettings] = useState<SettingsSnapshot>(DEFAULT_SETTINGS);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const isMounted = useRef(false);
+  const requestGeneration = useRef(0);
+
+  const beginRequest = useCallback(() => {
+    requestGeneration.current += 1;
+    return requestGeneration.current;
+  }, []);
+
+  const isCurrentRequest = useCallback((generation: number) => {
+    return isMounted.current && requestGeneration.current === generation;
+  }, []);
+
+  const updateSettings = useCallback(
+    async (request: () => Promise<SettingsSnapshot>) => {
+      const generation = beginRequest();
+      const nextSettings = await request();
+      if (isCurrentRequest(generation)) {
+        setSettings(nextSettings);
+      }
+    },
+    [beginRequest, isCurrentRequest],
+  );
 
   const reload = useCallback(async () => {
+    const generation = beginRequest();
     try {
-      setSettings(await settingsClient.getSettings());
+      const nextSettings = await settingsClient.getSettings();
+      if (isCurrentRequest(generation)) {
+        setSettings(nextSettings);
+      }
     } catch {
-      setSettings({ ...DEFAULT_SETTINGS, warning: LOAD_FAILURE_WARNING });
+      if (isCurrentRequest(generation)) {
+        setSettings({ ...DEFAULT_SETTINGS, warning: LOAD_FAILURE_WARNING });
+      }
     } finally {
-      setHasLoaded(true);
+      if (isCurrentRequest(generation)) {
+        setHasLoaded(true);
+      }
     }
-  }, []);
+  }, [beginRequest, isCurrentRequest]);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      beginRequest();
+    };
+  }, [beginRequest]);
 
   useEffect(() => {
     void reload();
@@ -83,32 +122,47 @@ export default function SettingsProvider({ children }: SettingsProviderProps) {
     };
 
     applyTheme(mediaQuery.matches ? "dark" : "light");
-    mediaQuery.addEventListener("change", followSystemTheme);
-    return () => mediaQuery.removeEventListener("change", followSystemTheme);
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", followSystemTheme);
+      return () =>
+        mediaQuery.removeEventListener("change", followSystemTheme);
+    }
+
+    if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(followSystemTheme);
+      return () => mediaQuery.removeListener(followSystemTheme);
+    }
   }, [settings.theme]);
 
-  const setAutoLockSeconds = useCallback(async (value: AutoLockSeconds) => {
-    setSettings(await settingsClient.setAutoLockSeconds(value));
-  }, []);
-
-  const setClipboardClearSeconds = useCallback(
-    async (value: ClipboardClearSeconds) => {
-      setSettings(await settingsClient.setClipboardClearSeconds(value));
-    },
-    [],
+  const setAutoLockSeconds = useCallback(
+    (value: AutoLockSeconds) =>
+      updateSettings(() => settingsClient.setAutoLockSeconds(value)),
+    [updateSettings],
   );
 
-  const setTheme = useCallback(async (value: ThemePreference) => {
-    setSettings(await settingsClient.setTheme(value));
-  }, []);
+  const setClipboardClearSeconds = useCallback(
+    (value: ClipboardClearSeconds) =>
+      updateSettings(() => settingsClient.setClipboardClearSeconds(value)),
+    [updateSettings],
+  );
 
-  const setLaunchAtStartup = useCallback(async (enabled: boolean) => {
-    setSettings(await settingsClient.setLaunchAtStartup(enabled));
-  }, []);
+  const setTheme = useCallback(
+    (value: ThemePreference) => updateSettings(() => settingsClient.setTheme(value)),
+    [updateSettings],
+  );
+
+  const setLaunchAtStartup = useCallback(
+    (enabled: boolean) =>
+      updateSettings(() => settingsClient.setLaunchAtStartup(enabled)),
+    [updateSettings],
+  );
 
   const resetToDefaults = useCallback(() => {
-    setSettings(DEFAULT_SETTINGS);
-  }, []);
+    beginRequest();
+    if (isMounted.current) {
+      setSettings(DEFAULT_SETTINGS);
+    }
+  }, [beginRequest]);
 
   const contextValue: SettingsContextValue = {
     settings,
