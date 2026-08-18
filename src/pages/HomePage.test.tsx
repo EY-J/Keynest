@@ -5,10 +5,7 @@ import HomePage from "./HomePage";
 describe("HomePage", () => {
   it("renders the shared KeyNest mark in the home brand block", () => {
     const { container } = render(
-      <HomePage
-        onOpenPasswordVault={vi.fn()}
-        onLockKeynest={vi.fn().mockResolvedValue(undefined)}
-      />,
+      <HomePage onOpenPasswordVault={vi.fn()} />,
     );
 
     expect(

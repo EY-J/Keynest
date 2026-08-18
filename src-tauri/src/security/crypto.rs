@@ -90,11 +90,22 @@ pub(crate) fn wrap_new_vault_key(
     params: KdfParams,
     entropy: &dyn EntropySource,
 ) -> Result<(WrappedVaultKey, VaultKey), CryptoError> {
+    let mut vault_key = Zeroizing::new([0_u8; VAULT_KEY_LENGTH]);
+    entropy.fill(vault_key.as_mut())?;
+    let wrapped_key = wrap_existing_vault_key(password, &vault_key, params, entropy)?;
+
+    Ok((wrapped_key, VaultKey(vault_key)))
+}
+
+pub(crate) fn wrap_existing_vault_key(
+    password: &str,
+    vault_key: &[u8; VAULT_KEY_LENGTH],
+    params: KdfParams,
+    entropy: &dyn EntropySource,
+) -> Result<WrappedVaultKey, CryptoError> {
     let mut salt = [0_u8; SALT_LENGTH];
     let mut nonce = [0_u8; NONCE_LENGTH];
-    let mut vault_key = Zeroizing::new([0_u8; VAULT_KEY_LENGTH]);
     entropy.fill(&mut salt)?;
-    entropy.fill(vault_key.as_mut())?;
     entropy.fill(&mut nonce)?;
 
     let wrapping_key = derive_wrapping_key(password, &salt, params)?;
@@ -104,21 +115,18 @@ pub(crate) fn wrap_new_vault_key(
         .encrypt(
             XNonce::from_slice(&nonce),
             Payload {
-                msg: vault_key.as_ref(),
+                msg: vault_key,
                 aad: PROFILE_AAD,
             },
         )
         .map_err(|_| CryptoError::AuthenticationFailed)?;
 
-    Ok((
-        WrappedVaultKey {
-            params,
-            salt: STANDARD.encode(salt),
-            nonce: STANDARD.encode(nonce),
-            ciphertext: STANDARD.encode(ciphertext),
-        },
-        VaultKey(vault_key),
-    ))
+    Ok(WrappedVaultKey {
+        params,
+        salt: STANDARD.encode(salt),
+        nonce: STANDARD.encode(nonce),
+        ciphertext: STANDARD.encode(ciphertext),
+    })
 }
 
 pub(crate) fn unwrap_vault_key(
@@ -230,5 +238,24 @@ mod tests {
             unwrap_vault_key("a secure master password", &wrapped),
             Err(CryptoError::AuthenticationFailed)
         ));
+    }
+
+    #[test]
+    fn password_change_rewraps_existing_vault_key_without_changing_it() {
+        let entropy = FixedEntropy;
+        let (_, vault_key) =
+            wrap_new_vault_key("old secure master password", KdfParams::testing(), &entropy)
+                .unwrap();
+
+        let wrapped = wrap_existing_vault_key(
+            "new secure master password",
+            vault_key.expose(),
+            KdfParams::testing(),
+            &entropy,
+        )
+        .unwrap();
+        let unwrapped = unwrap_vault_key("new secure master password", &wrapped).unwrap();
+
+        assert_eq!(unwrapped.expose_for_test(), vault_key.expose_for_test());
     }
 }

@@ -8,12 +8,14 @@ use thiserror::Error;
 
 use super::{
     crypto::{
-        unwrap_vault_key, wrap_new_vault_key, CryptoError, EntropySource, KdfParams, VaultKey,
+        unwrap_vault_key, wrap_existing_vault_key, wrap_new_vault_key, CryptoError, EntropySource,
+        KdfParams, VaultKey,
     },
     storage::{ProfileLoad, ProfileStore, StorageError, StoredProfile},
 };
 
 const MINIMUM_PASSWORD_CHARACTERS: usize = 12;
+const RESET_CONFIRMATION: &str = "RESET KEYNEST";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -22,6 +24,12 @@ pub(crate) enum AuthStatus {
     Locked,
     Unlocked,
     DataError,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LockOutcome {
+    pub status: AuthStatus,
+    pub transitioned: bool,
 }
 
 #[derive(Clone)]
@@ -149,35 +157,115 @@ impl AuthService {
         }
     }
 
-    pub(crate) fn lock(&self) -> AuthStatus {
+    pub(crate) fn lock(&self) -> LockOutcome {
         let mut inner = self.lock_inner();
         let previous = std::mem::replace(&mut inner.state, AuthState::DataError);
+        let transitioned = matches!(&previous, AuthState::Unlocked { .. });
         inner.state = match previous {
             AuthState::Unlocked { profile, .. } => AuthState::Locked(profile),
             other => other,
         };
-        match inner.state {
+        let status = match inner.state {
             AuthState::SetupRequired => AuthStatus::SetupRequired,
             AuthState::Locked(_) => AuthStatus::Locked,
             AuthState::Unlocked { .. } => AuthStatus::Unlocked,
             AuthState::DataError => AuthStatus::DataError,
+        };
+        LockOutcome {
+            status,
+            transitioned,
         }
     }
 
-    pub(crate) fn reset_keynest(&self, confirmation: &str) -> Result<(), AuthError> {
-        if confirmation != "RESET" {
-            return Err(AuthError::InvalidResetConfirmation);
+    pub(crate) fn change_master_password(
+        &self,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<(), AuthError> {
+        if new_password.chars().count() < MINIMUM_PASSWORD_CHARACTERS {
+            return Err(AuthError::PasswordTooShort);
         }
 
         let mut inner = self.lock_inner();
-        if self.store.reset().is_err() {
-            inner.state = AuthState::DataError;
-            return Err(AuthError::LocalDataFailure);
+        let (profile, vault_key) = match &mut inner.state {
+            AuthState::Unlocked { profile, vault_key } => (profile, vault_key),
+            AuthState::Locked(_) => return Err(AuthError::Unauthorized),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+
+        let verified_key = match unwrap_vault_key(current_password, &profile.wrapped_key) {
+            Ok(key) => key,
+            Err(CryptoError::AuthenticationFailed) => {
+                return Err(AuthError::InvalidCredentials);
+            }
+            Err(_) => return Err(AuthError::DataDamaged),
+        };
+        if verified_key.expose() != vault_key.expose() {
+            return Err(AuthError::DataDamaged);
         }
+
+        let wrapped_key = wrap_existing_vault_key(
+            new_password,
+            vault_key.expose(),
+            self.kdf_params,
+            self.entropy.as_ref(),
+        )
+        .map_err(|_| AuthError::LocalDataFailure)?;
+        let replacement = StoredProfile::new(wrapped_key);
+        self.store.replace(&replacement)?;
+        *profile = replacement;
+        Ok(())
+    }
+
+    pub(crate) fn validate_reset_confirmation(&self, confirmation: &str) -> Result<(), AuthError> {
+        if confirmation != RESET_CONFIRMATION {
+            return Err(AuthError::InvalidResetConfirmation);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn validate_authenticated_reset(
+        &self,
+        current_password: &str,
+        confirmation: &str,
+    ) -> Result<(), AuthError> {
+        let inner = self.lock_inner();
+        let (profile, vault_key) = match &inner.state {
+            AuthState::Unlocked { profile, vault_key } => (profile, vault_key),
+            AuthState::Locked(_) => return Err(AuthError::Unauthorized),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        self.validate_reset_confirmation(confirmation)?;
+
+        let verified_key = match unwrap_vault_key(current_password, &profile.wrapped_key) {
+            Ok(key) => key,
+            Err(CryptoError::AuthenticationFailed) => {
+                return Err(AuthError::InvalidCredentials);
+            }
+            Err(_) => return Err(AuthError::DataDamaged),
+        };
+        if verified_key.expose() != vault_key.expose() {
+            return Err(AuthError::DataDamaged);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn finish_reset(&self) -> Result<(), AuthError> {
+        let mut inner = self.lock_inner();
+        self.store.reset()?;
         inner.failed_attempts = 0;
         inner.next_allowed_at = None;
         inner.state = AuthState::SetupRequired;
         Ok(())
+    }
+
+    pub(crate) fn reset_keynest(&self, confirmation: &str) -> Result<(), AuthError> {
+        self.validate_reset_confirmation(confirmation)?;
+        self.finish_reset()
     }
 
     // This is the authorization boundary that future vault commands must use.
@@ -212,7 +300,7 @@ pub(crate) enum AuthError {
     InvalidCredentials,
     #[error("wait before trying again")]
     Throttled { retry_after_ms: u64 },
-    #[error("type RESET exactly to confirm")]
+    #[error("type RESET KEYNEST exactly to confirm")]
     InvalidResetConfirmation,
     #[error("KeyNest is locked")]
     Unauthorized,
@@ -245,7 +333,10 @@ fn record_failed_attempt(inner: &mut AuthInner, now: Instant) {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::Arc,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
         time::{Duration, Instant},
     };
 
@@ -267,8 +358,46 @@ mod tests {
         }
     }
 
+    struct AlternateEntropy;
+
+    impl EntropySource for AlternateEntropy {
+        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            let length = destination.len() as u8;
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = length.wrapping_add(index as u8).wrapping_add(1);
+            }
+            Ok(())
+        }
+    }
+
+    struct SwitchableEntropy {
+        fail: AtomicBool,
+    }
+
+    impl SwitchableEntropy {
+        fn working() -> Self {
+            Self {
+                fail: AtomicBool::new(false),
+            }
+        }
+
+        fn fail(&self) {
+            self.fail.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl EntropySource for SwitchableEntropy {
+        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(CryptoError::EntropyUnavailable);
+            }
+
+            FixedEntropy.fill(destination)
+        }
+    }
+
     struct AuthFixture {
-        _temp: tempfile::TempDir,
+        temp: tempfile::TempDir,
         service: AuthService,
     }
 
@@ -278,10 +407,7 @@ mod tests {
             let params = KdfParams::testing();
             let store = ProfileStore::new(temp.path().to_path_buf(), params);
             let service = AuthService::load(store, params, Arc::new(FixedEntropy));
-            Self {
-                _temp: temp,
-                service,
-            }
+            Self { temp, service }
         }
 
         fn with_profile_bytes(bytes: &[u8]) -> Self {
@@ -290,10 +416,19 @@ mod tests {
             let params = KdfParams::testing();
             let store = ProfileStore::new(temp.path().to_path_buf(), params);
             let service = AuthService::load(store, params, Arc::new(FixedEntropy));
-            Self {
-                _temp: temp,
-                service,
-            }
+            Self { temp, service }
+        }
+
+        fn create_unlocked_with_vault(&self) {
+            self.service
+                .create_master_password("a secure master password")
+                .unwrap();
+            std::fs::write(self.temp.path().join("vault.enc"), b"encrypted vault").unwrap();
+        }
+
+        fn assert_security_files_exist(&self) {
+            assert!(self.temp.path().join("profile.json").is_file());
+            assert!(self.temp.path().join("vault.enc").is_file());
         }
     }
 
@@ -321,6 +456,37 @@ mod tests {
     }
 
     #[test]
+    fn lock_outcome_is_true_only_for_the_unlocked_to_locked_transition() {
+        let fixture = AuthFixture::new();
+        assert_eq!(
+            fixture.service.lock(),
+            LockOutcome {
+                status: AuthStatus::SetupRequired,
+                transitioned: false,
+            }
+        );
+        fixture
+            .service
+            .create_master_password("a secure master password")
+            .unwrap();
+
+        assert_eq!(
+            fixture.service.lock(),
+            LockOutcome {
+                status: AuthStatus::Locked,
+                transitioned: true,
+            }
+        );
+        assert_eq!(
+            fixture.service.lock(),
+            LockOutcome {
+                status: AuthStatus::Locked,
+                transitioned: false,
+            }
+        );
+    }
+
+    #[test]
     fn short_password_is_rejected_by_rust() {
         let fixture = AuthFixture::new();
 
@@ -343,20 +509,201 @@ mod tests {
     }
 
     #[test]
-    fn reset_requires_exact_confirmation() {
+    fn reset_confirmation_rejects_every_non_exact_phrase_without_mutation() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+
+        for confirmation in [
+            "RESET",
+            "reset keynest",
+            "Reset KeyNest",
+            " RESET KEYNEST",
+            "RESET KEYNEST ",
+            "DELETE KEYNEST",
+            "",
+        ] {
+            assert_eq!(
+                fixture.service.validate_reset_confirmation(confirmation),
+                Err(AuthError::InvalidResetConfirmation),
+                "unexpectedly accepted {confirmation:?}",
+            );
+            assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+            fixture.assert_security_files_exist();
+        }
+    }
+
+    #[test]
+    fn reset_confirmation_validation_does_not_delete_or_change_state() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        fixture.service.lock();
+
+        fixture
+            .service
+            .validate_reset_confirmation("RESET KEYNEST")
+            .unwrap();
+
+        assert_eq!(fixture.service.status(), AuthStatus::Locked);
+        fixture.assert_security_files_exist();
+    }
+
+    #[test]
+    fn authenticated_reset_wrong_password_preserves_files_and_state() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+
+        assert_eq!(
+            fixture
+                .service
+                .validate_authenticated_reset("wrong master password", "RESET KEYNEST"),
+            Err(AuthError::InvalidCredentials),
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        fixture.assert_security_files_exist();
+    }
+
+    #[test]
+    fn authenticated_reset_wrong_confirmation_preserves_files_and_state() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+
+        assert_eq!(
+            fixture
+                .service
+                .validate_authenticated_reset("a secure master password", "RESET"),
+            Err(AuthError::InvalidResetConfirmation),
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        fixture.assert_security_files_exist();
+    }
+
+    #[test]
+    fn authenticated_reset_while_locked_is_unauthorized_without_mutation() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        fixture.service.lock();
+
+        assert_eq!(
+            fixture
+                .service
+                .validate_authenticated_reset("a secure master password", "RESET KEYNEST"),
+            Err(AuthError::Unauthorized),
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Locked);
+        fixture.assert_security_files_exist();
+    }
+
+    #[test]
+    fn authenticated_reset_validation_does_not_delete_or_change_state() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        let live_key = fixture.service.require_vault_key(|key| *key).unwrap();
+
+        fixture
+            .service
+            .validate_authenticated_reset("a secure master password", "RESET KEYNEST")
+            .unwrap();
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            live_key
+        );
+        fixture.assert_security_files_exist();
+    }
+
+    #[test]
+    fn authenticated_reset_rejects_a_live_session_key_mismatch_without_mutation() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        let profile_bytes = std::fs::read(fixture.temp.path().join("profile.json")).unwrap();
+        let (_, mismatched_live_key) = wrap_new_vault_key(
+            "unrelated secure master password",
+            KdfParams::testing(),
+            &AlternateEntropy,
+        )
+        .unwrap();
+        {
+            let mut inner = fixture.service.lock_inner();
+            let profile = match &inner.state {
+                AuthState::Unlocked { profile, .. } => profile.clone(),
+                _ => panic!("fixture must be unlocked"),
+            };
+            inner.state = AuthState::Unlocked {
+                profile,
+                vault_key: mismatched_live_key,
+            };
+        }
+
+        assert_eq!(
+            fixture
+                .service
+                .validate_authenticated_reset("a secure master password", "RESET KEYNEST"),
+            Err(AuthError::DataDamaged),
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("profile.json")).unwrap(),
+            profile_bytes
+        );
+        fixture.assert_security_files_exist();
+    }
+
+    #[test]
+    fn finish_reset_deletes_security_files_and_changes_state_only_on_success() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+
+        fixture.service.finish_reset().unwrap();
+
+        assert_eq!(fixture.service.status(), AuthStatus::SetupRequired);
+        assert!(!fixture.temp.path().join("profile.json").exists());
+        assert!(!fixture.temp.path().join("vault.enc").exists());
+    }
+
+    #[test]
+    fn failed_finish_reset_preserves_the_in_memory_retry_path() {
         let fixture = AuthFixture::new();
         fixture
             .service
             .create_master_password("a secure master password")
             .unwrap();
+        std::fs::create_dir(fixture.temp.path().join("vault.enc")).unwrap();
+        let live_key = fixture.service.require_vault_key(|key| *key).unwrap();
 
         assert_eq!(
-            fixture.service.reset_keynest("reset"),
+            fixture.service.finish_reset(),
+            Err(AuthError::LocalDataFailure)
+        );
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            live_key
+        );
+        assert!(fixture.temp.path().join("profile.json").is_file());
+
+        std::fs::remove_dir(fixture.temp.path().join("vault.enc")).unwrap();
+        fixture.service.finish_reset().unwrap();
+        assert_eq!(fixture.service.status(), AuthStatus::SetupRequired);
+    }
+
+    #[test]
+    fn reset_compatibility_wrapper_requires_reset_keynest() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+
+        assert_eq!(
+            fixture.service.reset_keynest("RESET"),
             Err(AuthError::InvalidResetConfirmation),
         );
         assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        fixture.assert_security_files_exist();
 
-        fixture.service.reset_keynest("RESET").unwrap();
+        fixture.service.reset_keynest("RESET KEYNEST").unwrap();
         assert_eq!(fixture.service.status(), AuthStatus::SetupRequired);
     }
 
@@ -427,5 +774,243 @@ mod tests {
                 retry_after_ms: 5_000
             })
         ));
+    }
+
+    #[test]
+    fn password_change_success_preserves_vault_key_and_unlocked_session() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before = fixture.service.require_vault_key(|key| *key).unwrap();
+
+        fixture
+            .service
+            .change_master_password("old secure master password", "new secure master password")
+            .unwrap();
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            before
+        );
+        fixture.service.lock();
+        assert_eq!(
+            fixture.service.unlock("old secure master password"),
+            Err(AuthError::InvalidCredentials)
+        );
+        fixture
+            .service
+            .unlock("new secure master password")
+            .unwrap();
+    }
+
+    #[test]
+    fn password_change_short_new_password_is_rejected_without_mutation() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_key = fixture.service.require_vault_key(|key| *key).unwrap();
+        let before_profile = std::fs::read(fixture.service.store.profile_path()).unwrap();
+
+        assert_eq!(
+            fixture
+                .service
+                .change_master_password("old secure master password", "too short"),
+            Err(AuthError::PasswordTooShort)
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            before_key
+        );
+        assert_eq!(
+            std::fs::read(fixture.service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        fixture.service.lock();
+        fixture
+            .service
+            .unlock("old secure master password")
+            .unwrap();
+    }
+
+    #[test]
+    fn password_change_incorrect_current_password_is_rejected_without_mutation() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_key = fixture.service.require_vault_key(|key| *key).unwrap();
+        let before_profile = std::fs::read(fixture.service.store.profile_path()).unwrap();
+
+        assert_eq!(
+            fixture.service.change_master_password(
+                "wrong secure master password",
+                "new secure master password"
+            ),
+            Err(AuthError::InvalidCredentials)
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            before_key
+        );
+        assert_eq!(
+            std::fs::read(fixture.service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        fixture.service.lock();
+        fixture
+            .service
+            .unlock("old secure master password")
+            .unwrap();
+    }
+
+    #[test]
+    fn password_change_locked_call_is_unauthorized() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        fixture.service.lock();
+
+        assert_eq!(
+            fixture
+                .service
+                .change_master_password("old secure master password", "new secure master password"),
+            Err(AuthError::Unauthorized)
+        );
+
+        fixture
+            .service
+            .unlock("old secure master password")
+            .unwrap();
+    }
+
+    #[test]
+    fn password_change_replace_failure_preserves_disk_password_and_unlocked_session() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_key = fixture.service.require_vault_key(|key| *key).unwrap();
+        let before_profile = std::fs::read(fixture.service.store.profile_path()).unwrap();
+        fixture.service.store.fail_next_replace_for_test();
+
+        assert_eq!(
+            fixture
+                .service
+                .change_master_password("old secure master password", "new secure master password"),
+            Err(AuthError::LocalDataFailure)
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            before_key
+        );
+        assert_eq!(
+            std::fs::read(fixture.service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        fixture.service.lock();
+        fixture
+            .service
+            .unlock("old secure master password")
+            .unwrap();
+    }
+
+    #[test]
+    fn password_change_entropy_failure_preserves_disk_password_key_and_unlocked_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf(), params);
+        let entropy = Arc::new(SwitchableEntropy::working());
+        let service = AuthService::load(store, params, entropy.clone());
+        service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_key = service.require_vault_key(|key| *key).unwrap();
+        let before_profile = std::fs::read(service.store.profile_path()).unwrap();
+        entropy.fail();
+
+        assert_eq!(
+            service
+                .change_master_password("old secure master password", "new secure master password"),
+            Err(AuthError::LocalDataFailure)
+        );
+
+        assert_eq!(service.status(), AuthStatus::Unlocked);
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), before_key);
+        assert_eq!(
+            std::fs::read(service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        service.lock();
+        service.unlock("old secure master password").unwrap();
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), before_key);
+    }
+
+    #[test]
+    fn password_change_live_key_mismatch_fails_closed_without_storage_or_session_mutation() {
+        let fixture = AuthFixture::new();
+        fixture
+            .service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let before_profile = std::fs::read(fixture.service.store.profile_path()).unwrap();
+        let (_, mismatched_live_key) = wrap_new_vault_key(
+            "unrelated secure master password",
+            KdfParams::testing(),
+            &AlternateEntropy,
+        )
+        .unwrap();
+        let mismatched_key_bytes = *mismatched_live_key.expose();
+        {
+            let mut inner = fixture.service.lock_inner();
+            let profile = match &inner.state {
+                AuthState::Unlocked { profile, .. } => profile.clone(),
+                _ => panic!("fixture must be unlocked"),
+            };
+            inner.state = AuthState::Unlocked {
+                profile,
+                vault_key: mismatched_live_key,
+            };
+        }
+
+        assert_eq!(
+            fixture
+                .service
+                .change_master_password("old secure master password", "new secure master password"),
+            Err(AuthError::DataDamaged)
+        );
+
+        assert_eq!(fixture.service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            mismatched_key_bytes
+        );
+        assert_eq!(
+            std::fs::read(fixture.service.store.profile_path()).unwrap(),
+            before_profile
+        );
+        fixture.service.lock();
+        fixture
+            .service
+            .unlock("old secure master password")
+            .unwrap();
+        assert_ne!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            mismatched_key_bytes
+        );
     }
 }

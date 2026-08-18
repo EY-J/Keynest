@@ -45,6 +45,10 @@ export const authClient = {
     invokeAuth("create_master_password", { password }),
   unlock: (password: string) => invokeAuth("unlock", { password }),
   lock: () => invokeAuth("lock"),
+  changeMasterPassword: (currentPassword: string, newPassword: string) =>
+    invokeAuth("change_master_password", { currentPassword, newPassword }),
   resetKeynest: (confirmation: string) =>
     invokeAuth("reset_keynest", { confirmation }),
+  resetKeynestAuthenticated: (currentPassword: string, confirmation: string) =>
+    invokeAuth("reset_keynest_authenticated", { currentPassword, confirmation }),
 };

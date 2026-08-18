@@ -40,7 +40,7 @@ export default function ResetDialog({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (confirmation !== "RESET") {
+    if (confirmation !== "RESET KEYNEST") {
       return;
     }
 
@@ -71,12 +71,14 @@ export default function ResetDialog({
         <p className="auth-eyebrow danger-text">DESTRUCTIVE RESET</p>
         <h2 id="reset-dialog-title">Reset KeyNest?</h2>
         <p>
-          Your encrypted profile and vault will be permanently deleted. The
-          current master password cannot be recovered.
+          This permanently erases your encrypted profile and vault. It does
+          not unlock your existing data.
         </p>
 
         <form onSubmit={(event) => void submit(event)}>
-          <label htmlFor="reset-confirmation">Type RESET to confirm</label>
+          <label htmlFor="reset-confirmation">
+            Type RESET KEYNEST to confirm
+          </label>
           <input
             ref={inputRef}
             id="reset-confirmation"
@@ -98,7 +100,7 @@ export default function ResetDialog({
             </button>
             <button
               className="danger-button"
-              disabled={confirmation !== "RESET" || isSubmitting}
+              disabled={confirmation !== "RESET KEYNEST" || isSubmitting}
             >
               {isSubmitting ? "Resetting…" : "Reset KeyNest"}
             </button>
