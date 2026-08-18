@@ -1,7 +1,7 @@
 import "../App.css";
 import AuthGate from "../features/auth/components/AuthGate";
 import SettingsProvider from "../features/settings/SettingsProvider";
-import HomePage from "../pages/HomePage";
+import AuthenticatedShell from "../shared/components/AuthenticatedShell";
 
 export default function App() {
   return (
@@ -19,7 +19,7 @@ function KeyNestApp() {
   return (
     <AuthGate>
       {({ lock }) => (
-        <HomePage
+        <AuthenticatedShell
           onOpenPasswordVault={openPasswordVault}
           onLockKeynest={lock}
         />

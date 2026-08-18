@@ -1,56 +1,12 @@
-import { useEffect, useState } from "react";
-import AppTitleBar from "../shared/components/AppTitleBar";
 import BrandMark from "../shared/components/BrandMark";
-import NavigationSidebar from "../shared/components/NavigationSidebar";
 
 type HomePageProps = {
   onOpenPasswordVault: () => void;
-  onLockKeynest: () => Promise<void>;
 };
 
-export default function HomePage({
-  onOpenPasswordVault,
-  onLockKeynest,
-}: HomePageProps) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
-  useEffect(() => {
-    if (!isSidebarOpen) {
-      return;
-    }
-
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsSidebarOpen(false);
-      }
-    }
-
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isSidebarOpen]);
-
+export default function HomePage({ onOpenPasswordVault }: HomePageProps) {
   return (
-    <div className="home-page">
-      <AppTitleBar
-        isNavigationOpen={isSidebarOpen}
-        onOpenNavigation={() => setIsSidebarOpen((isOpen) => !isOpen)}
-      />
-
-      <NavigationSidebar
-        isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
-        onOpenPasswordVault={onOpenPasswordVault}
-        onLockKeynest={onLockKeynest}
-      />
-
-      <button
-        className={`sidebar-backdrop ${isSidebarOpen ? "visible" : ""}`}
-        type="button"
-        aria-label="Close navigation"
-        tabIndex={isSidebarOpen ? 0 : -1}
-        onClick={() => setIsSidebarOpen(false)}
-      />
-
+    <>
       <header className="topbar">
         <div className="brand">
           <BrandMark className="logo" />
@@ -160,6 +116,6 @@ export default function HomePage({
         <span>KeyNest</span>
         <span>Local-first privacy for Windows</span>
       </footer>
-    </div>
+    </>
   );
 }

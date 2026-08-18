@@ -1,0 +1,81 @@
+import { useState } from "react";
+
+export type SettingsCategory =
+  | "security"
+  | "general"
+  | "appearance"
+  | "about";
+
+const CATEGORIES: Array<{
+  id: SettingsCategory;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "security",
+    label: "Security",
+    description: "Review the security preferences that protect your KeyNest.",
+  },
+  {
+    id: "general",
+    label: "General",
+    description: "Choose how KeyNest behaves on this device.",
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Personalize how KeyNest looks while you use it.",
+  },
+  {
+    id: "about",
+    label: "About",
+    description: "KeyNest is a private, local-first space for your important information.",
+  },
+];
+
+export default function SettingsPage() {
+  const [activeCategory, setActiveCategory] =
+    useState<SettingsCategory>("security");
+  const category = CATEGORIES.find(({ id }) => id === activeCategory)!;
+
+  return (
+    <main className="settings-page">
+      <section className="settings-content">
+        <p className="eyebrow">KEYNEST PREFERENCES</p>
+        <h1>Settings</h1>
+        <p className="settings-introduction">
+          Set up the parts of KeyNest that make your private space feel right.
+        </p>
+
+        <nav aria-label="Settings categories">
+          <div className="settings-tabs" role="tablist">
+            {CATEGORIES.map(({ id, label }) => (
+              <button
+                key={id}
+                id={`${id}-tab`}
+                className={`settings-tab ${activeCategory === id ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeCategory === id}
+                aria-controls={`${id}-panel`}
+                onClick={() => setActiveCategory(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </nav>
+
+        <section
+          id={`${category.id}-panel`}
+          className="settings-panel"
+          role="tabpanel"
+          aria-labelledby={`${category.id}-tab`}
+        >
+          <h2>{category.label}</h2>
+          <p>{category.description}</p>
+        </section>
+      </section>
+    </main>
+  );
+}

@@ -65,6 +65,22 @@ button {
     #080d0b;
 }
 
+.settings-warning-banner {
+  position: fixed;
+  z-index: 40;
+  top: 52px;
+  left: 50%;
+  width: min(720px, calc(100% - 32px));
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(238, 190, 112, 0.4);
+  border-radius: 10px;
+  background: #2c2518;
+  color: #ffe2a8;
+  font-size: 0.84rem;
+  transform: translateX(-50%);
+}
+
 .app-titlebar {
   position: fixed;
   z-index: 50;
@@ -705,6 +721,71 @@ button {
   width: min(1150px, calc(100% - 48px));
   flex: 1;
   margin: 0 auto;
+}
+
+.settings-page {
+  width: min(900px, calc(100% - 48px));
+  flex: 1;
+  margin: 0 auto;
+  padding: 100px 0 80px;
+}
+
+.settings-content {
+  max-width: 720px;
+}
+
+.settings-content h1,
+.settings-panel h2 {
+  margin: 0;
+}
+
+.settings-content h1 {
+  font-size: clamp(2.5rem, 5vw, 4.4rem);
+  letter-spacing: -0.045em;
+}
+
+.settings-introduction {
+  max-width: 610px;
+  margin: 18px 0 32px;
+  color: #a8bbb1;
+  line-height: 1.65;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-tab {
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #a8bbb1;
+  cursor: pointer;
+}
+
+.settings-tab:hover,
+.settings-tab.active {
+  border-color: rgba(84, 245, 174, 0.35);
+  background: rgba(84, 245, 174, 0.09);
+  color: #65f7b6;
+}
+
+.settings-panel {
+  margin-top: 18px;
+  padding: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px;
+  background: rgba(13, 21, 17, 0.8);
+}
+
+.settings-panel p {
+  margin: 10px 0 0;
+  color: #a8bbb1;
+  line-height: 1.6;
 }
 
 .hero {

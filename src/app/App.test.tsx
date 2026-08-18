@@ -94,4 +94,23 @@ describe("App master-password integration", () => {
       screen.queryByText(/Keep your important information inside your/),
     ).not.toBeInTheDocument();
   });
+
+  it("moves between the authenticated Home and Settings destinations", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: /secure nest/i }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    await user.click(screen.getByRole("button", { name: "Home" }));
+    expect(
+      screen.getByRole("heading", { name: /secure nest/i }),
+    ).toBeInTheDocument();
+  });
 });
