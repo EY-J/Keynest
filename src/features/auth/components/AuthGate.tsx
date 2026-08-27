@@ -190,7 +190,7 @@ export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
         return (
           <AuthLayout
             eyebrow="KEYNEST SECURITY"
-            title="Securing your nestâ€¦"
+            title="Securing your nest…"
             description="Connecting secure lock controls on this device."
           >
             <div className="auth-loading" aria-label="Checking security status" />

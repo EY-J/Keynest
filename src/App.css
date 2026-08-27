@@ -43,8 +43,8 @@
 
 :root {
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+    "IBM Plex Mono", ui-monospace, "Cascadia Code", "Source Code Pro",
+    Menlo, Consolas, "DejaVu Sans Mono", monospace;
   color: var(--kn-text);
   background: var(--kn-bg);
   font-synthesis: none;
@@ -497,15 +497,11 @@ button {
   font-weight: 700;
 }
 
-.password-input-wrap {
-  position: relative;
-}
-
 .auth-field input,
 .reset-dialog input {
   width: 100%;
   min-height: 50px;
-  padding: 0 74px 0 14px;
+  padding: 0 14px;
   border: 1px solid var(--kn-border);
   border-radius: 12px;
   outline: 0;
@@ -529,26 +525,6 @@ button {
 .auth-field input:disabled,
 .reset-dialog input:disabled {
   opacity: 0.65;
-}
-
-.password-reveal-button {
-  position: absolute;
-  top: 5px;
-  right: 6px;
-  min-width: 58px;
-  min-height: 40px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--kn-accent);
-  font-size: 0.75rem;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.password-reveal-button:hover {
-  background: var(--kn-accent-soft);
 }
 
 .auth-requirement {
@@ -1225,5 +1201,173 @@ footer {
   .reset-dialog {
     padding: 24px 18px;
   }
+}
+
+.password-vault-page {
+  min-height: calc(100vh - 40px);
+  width: min(1100px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 52px 0 72px;
+}
+
+.vault-page-heading,
+.vault-controls,
+.vault-dialog-title,
+.vault-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.vault-page-heading { margin-bottom: 28px; }
+.vault-page-heading h1 { margin: 0; font-size: clamp(2.5rem, 5vw, 4.4rem); letter-spacing: -0.045em; }
+.vault-page-heading p:not(.eyebrow) { margin: 10px 0 0; color: var(--kn-muted); }
+
+.vault-controls {
+  align-items: end;
+  margin-bottom: 28px;
+  padding: 16px;
+  border: 1px solid var(--kn-border);
+  border-radius: 16px;
+  background: var(--kn-surface);
+}
+
+.vault-controls label,
+.vault-record-form label,
+.vault-form-field,
+.vault-delete-confirmation label,
+.vault-password-display {
+  display: grid;
+  flex: 1;
+  gap: 7px;
+  color: var(--kn-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.vault-search-field { flex: 2 !important; }
+.vault-controls input,
+.vault-controls select,
+.vault-record-form input,
+.vault-record-form select,
+.vault-delete-confirmation input,
+.vault-password-display input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--kn-border);
+  border-radius: 10px;
+  outline: 0;
+  background: var(--kn-surface-raised);
+  color: var(--kn-text);
+}
+
+.vault-controls input:focus,
+.vault-controls select:focus,
+.vault-record-form input:focus,
+.vault-record-form select:focus,
+.vault-delete-confirmation input:focus,
+.vault-password-display input:focus,
+.vault-dialog button:focus-visible,
+.password-vault-page button:focus-visible { outline: 2px solid var(--kn-accent); outline-offset: 2px; }
+
+.vault-record-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.vault-record-card {
+  min-height: 170px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid var(--kn-border);
+  border-radius: 16px;
+  background: var(--kn-surface);
+  color: var(--kn-text);
+  text-align: left;
+  cursor: pointer;
+}
+.vault-record-card:hover { border-color: var(--kn-border-strong); background: var(--kn-accent-soft); }
+.vault-record-card strong { font-size: 1.05rem; }
+.vault-record-card span:not(.vault-record-category) { color: var(--kn-muted); font-size: 0.84rem; overflow-wrap: anywhere; }
+.vault-record-category { color: var(--kn-accent); font-size: 0.69rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.vault-status, .vault-empty-state, .vault-load-error { padding: 30px; border: 1px solid var(--kn-border); border-radius: 16px; background: var(--kn-surface); color: var(--kn-muted); text-align: center; }
+.vault-empty-state h2, .vault-empty-state p { margin-top: 0; }
+.vault-empty-state .primary-button { margin-top: 8px; }
+.vault-load-error { border-color: var(--kn-danger); color: var(--kn-danger); }
+.vault-load-error .secondary-button { margin-top: 6px; }
+
+.vault-dialog-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--kn-overlay); backdrop-filter: blur(8px); }
+.vault-dialog { width: min(620px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 26px; border: 1px solid var(--kn-border-strong); border-radius: 18px; background: var(--kn-surface-raised); box-shadow: 0 26px 90px var(--kn-overlay); }
+.vault-dialog h2 { margin: 0; font-size: 1.65rem; }
+.vault-close-button { width: 44px; min-height: 44px; border: 1px solid var(--kn-border); border-radius: 10px; background: transparent; color: var(--kn-text); font-size: 1.5rem; cursor: pointer; }
+.vault-record-form { display: grid; gap: 14px; margin-top: 24px; }
+.vault-dialog-actions { margin-top: 18px; }
+.vault-dialog-actions > button { flex: 1; min-height: 44px; }
+.vault-form-error { margin: 18px 0 0; padding: 11px 12px; border: 1px solid var(--kn-danger); border-radius: 10px; background: var(--kn-danger-soft); color: var(--kn-danger); }
+.vault-form-error p { margin: 0; }
+.vault-field-error { color: var(--kn-danger); font-size: 0.78rem; }
+.vault-success { color: var(--kn-accent); }
+.vault-record-detail { display: grid; gap: 14px; margin-top: 24px; }
+.vault-record-detail p { display: grid; gap: 4px; margin: 0; color: var(--kn-text); overflow-wrap: anywhere; }
+.vault-record-detail p span, .vault-password-display span { color: var(--kn-muted); font-size: 0.75rem; font-weight: 750; text-transform: uppercase; letter-spacing: 0.07em; }
+.vault-danger-button { min-height: 44px; padding: 0 15px; border: 1px solid var(--kn-danger); border-radius: 10px; background: var(--kn-danger); color: var(--kn-danger-contrast); font-weight: 750; cursor: pointer; }
+.vault-danger-button:disabled, .vault-dialog button:disabled { opacity: 0.52; cursor: not-allowed; }
+.vault-delete-confirmation { display: grid; gap: 14px; margin-top: 24px; padding: 18px; border: 1px solid var(--kn-danger); border-radius: 14px; background: var(--kn-danger-soft); }
+.vault-delete-confirmation h3, .vault-delete-confirmation p { margin: 0; }
+
+.vault-password-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 44px;
+  gap: 8px;
+}
+
+.vault-pw-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--kn-border);
+  border-radius: 10px;
+  background: var(--kn-surface-raised);
+  color: var(--kn-muted);
+  cursor: pointer;
+}
+
+.vault-pw-icon-btn:hover {
+  border-color: var(--kn-accent);
+  background: var(--kn-accent-soft);
+  color: var(--kn-accent);
+}
+
+
+.pw-strength-meter {
+  display: grid;
+  gap: 7px;
+}
+
+.pw-strength-bar-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--kn-border);
+}
+
+.pw-strength-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 180ms ease, background 180ms ease;
+}
+
+.pw-strength-label { font-size: 0.75rem; font-weight: 850; }
+
+@media (max-width: 800px) { .vault-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) {
+  .password-vault-page { width: calc(100% - 28px); padding-top: 32px; }
+  .vault-page-heading, .vault-controls, .vault-dialog-actions { align-items: stretch; flex-direction: column; }
+  .vault-page-heading .primary-button, .vault-controls label, .vault-dialog-actions > button { width: 100%; }
+  .vault-record-grid { grid-template-columns: 1fr; }
+  .vault-dialog-backdrop { padding: 14px; }
+  .vault-dialog { padding: 20px 16px; }
 }
 

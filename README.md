@@ -1,6 +1,14 @@
 # KeyNest
 
-KeyNest is a local-first Tauri application for keeping private information on a Windows PC or laptop. Its master-password boundary is implemented in Rust so the React interface cannot unlock protected backend data by itself.
+KeyNest is a local-first password vault for Windows. The React interface handles presentation, while Rust owns authentication, encryption, encrypted SQLite storage, clipboard protection, and automatic locking.
+
+## Features
+
+- Encrypted credential storage that stays on the local device
+- Master-password setup, unlock, change, and authenticated reset flows
+- Password generation and strength feedback
+- Configurable automatic locking and clipboard clearing
+- Light, dark, and system themes
 
 ## Local development
 
@@ -11,16 +19,15 @@ npm.cmd install
 npm.cmd run tauri dev
 ```
 
-Useful verification commands:
+## Verification
 
 ```powershell
-npm.cmd test
 npm.cmd run build
 cargo test --manifest-path src-tauri\Cargo.toml
 cargo build --manifest-path src-tauri\Cargo.toml
 ```
 
-## Master-password behavior
+## Security model
 
 - KeyNest requires the master password on every launch.
 - The master password derives a key that unwraps the encrypted vault key; it is not stored on disk.

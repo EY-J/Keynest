@@ -2,6 +2,8 @@ mod ipc;
 mod platform;
 mod security;
 mod settings;
+#[allow(dead_code)]
+pub(crate) mod vault;
 
 use std::{sync::Arc, time::Duration};
 
@@ -16,6 +18,7 @@ use security::{
 use settings::{SettingsService, SettingsStore};
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
+use vault::VaultService;
 
 fn resume_lock(auto_lock: &AutoLockService) {
     let _ = auto_lock.lock_now();
@@ -51,9 +54,10 @@ pub fn run() {
             app.manage(settings);
 
             let kdf_params = KdfParams::production();
-            let store = ProfileStore::new(app_data_dir, kdf_params);
+            let store = ProfileStore::new(app_data_dir.clone(), kdf_params);
             let auth = AuthService::load(store, kdf_params, Arc::new(OsEntropy));
             app.manage(auth.clone());
+            app.manage(VaultService::new(app_data_dir, Arc::new(OsEntropy)));
 
             let clipboard = ClipboardService::new(
                 Arc::new(TauriClipboardPort::new(app.handle().clone())),
@@ -88,7 +92,13 @@ pub fn run() {
             ipc::change_master_password,
             ipc::reset_keynest,
             ipc::reset_keynest_authenticated,
-            ipc::open_keynest_data_folder
+            ipc::open_keynest_data_folder,
+            ipc::list_vault_records,
+            ipc::create_vault_record,
+            ipc::get_vault_record,
+            ipc::update_vault_record,
+            ipc::delete_vault_record,
+            ipc::copy_vault_password
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

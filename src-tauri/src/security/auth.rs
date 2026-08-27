@@ -263,13 +263,13 @@ impl AuthService {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn reset_keynest(&self, confirmation: &str) -> Result<(), AuthError> {
         self.validate_reset_confirmation(confirmation)?;
         self.finish_reset()
     }
 
-    // This is the authorization boundary that future vault commands must use.
-    #[allow(dead_code)]
+    // Keep the vault key inside the authenticated Rust boundary.
     pub(crate) fn require_vault_key<T>(
         &self,
         operation: impl FnOnce(&[u8; 32]) -> T,

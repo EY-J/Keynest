@@ -134,6 +134,9 @@ impl ProfileStore {
     }
 
     pub(crate) fn reset(&self) -> Result<(), StorageError> {
+        remove_if_present(&self.app_data_dir.join("vault.enc-journal"))?;
+        remove_if_present(&self.app_data_dir.join("vault.enc-wal"))?;
+        remove_if_present(&self.app_data_dir.join("vault.enc-shm"))?;
         remove_if_present(&self.vault_path())?;
         remove_if_present(&self.profile_path())?;
         Ok(())
@@ -255,12 +258,18 @@ mod tests {
         let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
         std::fs::write(temp.path().join("profile.json"), b"profile").unwrap();
         std::fs::write(temp.path().join("vault.enc"), b"vault").unwrap();
+        std::fs::write(temp.path().join("vault.enc-journal"), b"journal").unwrap();
+        std::fs::write(temp.path().join("vault.enc-wal"), b"wal").unwrap();
+        std::fs::write(temp.path().join("vault.enc-shm"), b"shm").unwrap();
         std::fs::write(temp.path().join("keep.txt"), b"keep").unwrap();
 
         store.reset().unwrap();
 
         assert!(!temp.path().join("profile.json").exists());
         assert!(!temp.path().join("vault.enc").exists());
+        assert!(!temp.path().join("vault.enc-journal").exists());
+        assert!(!temp.path().join("vault.enc-wal").exists());
+        assert!(!temp.path().join("vault.enc-shm").exists());
         assert!(temp.path().join("keep.txt").exists());
     }
 

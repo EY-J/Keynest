@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { useSettings } from "../../features/settings/SettingsProvider";
 import HomePage from "../../pages/HomePage";
+import PasswordVaultPage from "../../pages/PasswordVaultPage";
 import SettingsPage from "../../pages/SettingsPage";
 import AppTitleBar from "./AppTitleBar";
 import NavigationSidebar from "./NavigationSidebar";
 
-export type AuthenticatedDestination = "home" | "settings";
+export type AuthenticatedDestination = "home" | "vault" | "settings";
 
 type AuthenticatedShellProps = {
-  onOpenPasswordVault: () => void;
   onLockKeynest: () => Promise<void>;
   onResetAuthenticated: (
     currentPassword: string,
@@ -17,7 +17,6 @@ type AuthenticatedShellProps = {
 };
 
 export default function AuthenticatedShell({
-  onOpenPasswordVault,
   onLockKeynest,
   onResetAuthenticated,
 }: AuthenticatedShellProps) {
@@ -58,7 +57,6 @@ export default function AuthenticatedShell({
         activeDestination={activeDestination}
         onClose={() => setIsSidebarOpen(false)}
         onNavigate={navigate}
-        onOpenPasswordVault={onOpenPasswordVault}
         onLockKeynest={onLockKeynest}
       />
 
@@ -77,7 +75,9 @@ export default function AuthenticatedShell({
       ) : null}
 
       {activeDestination === "home" ? (
-        <HomePage onOpenPasswordVault={onOpenPasswordVault} />
+        <HomePage onNavigateToVault={() => navigate("vault")} />
+      ) : activeDestination === "vault" ? (
+        <PasswordVaultPage />
       ) : (
         <SettingsPage onResetAuthenticated={onResetAuthenticated} />
       )}

@@ -1,4 +1,4 @@
-import { type Ref, useId, useState } from "react";
+import { type Ref, useId } from "react";
 
 type PasswordFieldProps = {
   label: string;
@@ -20,33 +20,20 @@ export default function PasswordField({
   inputRef,
 }: PasswordFieldProps) {
   const inputId = useId();
-  const [isVisible, setIsVisible] = useState(false);
-  const lowerCaseLabel = label.toLocaleLowerCase();
 
   return (
     <div className="auth-field">
       <label htmlFor={inputId}>{label}</label>
-      <div className="password-input-wrap">
-        <input
-          ref={inputRef}
-          id={inputId}
-          type={isVisible ? "text" : "password"}
-          value={value}
-          autoComplete={autoComplete}
-          autoFocus={autoFocus}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <button
-          className="password-reveal-button"
-          type="button"
-          disabled={disabled}
-          aria-label={`${isVisible ? "Hide" : "Show"} ${lowerCaseLabel}`}
-          onClick={() => setIsVisible((visible) => !visible)}
-        >
-          {isVisible ? "Hide" : "Show"}
-        </button>
-      </div>
+      <input
+        ref={inputRef}
+        id={inputId}
+        type="password"
+        value={value}
+        autoComplete={autoComplete}
+        autoFocus={autoFocus}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </div>
   );
 }

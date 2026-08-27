@@ -1,9 +1,8 @@
 type NavigationSidebarProps = {
   isOpen: boolean;
-  activeDestination: "home" | "settings";
+  activeDestination: "home" | "vault" | "settings";
   onClose(): void;
-  onNavigate(destination: "home" | "settings"): void;
-  onOpenPasswordVault(): void;
+  onNavigate(destination: "home" | "vault" | "settings"): void;
   onLockKeynest(): Promise<void>;
 };
 
@@ -12,16 +11,10 @@ export default function NavigationSidebar({
   activeDestination,
   onClose,
   onNavigate,
-  onOpenPasswordVault,
   onLockKeynest,
 }: NavigationSidebarProps) {
-  function navigate(destination: "home" | "settings") {
+  function navigate(destination: "home" | "vault" | "settings") {
     onNavigate(destination);
-  }
-
-  function openPasswordVault() {
-    onOpenPasswordVault();
-    onClose();
   }
 
   function lockKeynest() {
@@ -64,9 +57,11 @@ export default function NavigationSidebar({
         </button>
 
         <button
-          className="sidebar-link"
+          className={`sidebar-link ${
+            activeDestination === "vault" ? "active" : ""
+          }`}
           type="button"
-          onClick={openPasswordVault}
+          onClick={() => navigate("vault")}
         >
           <span className="sidebar-link-icon" aria-hidden="true">
             🔑

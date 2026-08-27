@@ -130,7 +130,7 @@ export default function AuthenticatedResetDialog({
               Cancel
             </button>
             <button className="danger-button" disabled={!canReset || isSubmitting}>
-              {isSubmitting ? "Resettingâ€¦" : "Reset KeyNest"}
+              {isSubmitting ? "Resetting…" : "Reset KeyNest"}
             </button>
           </div>
         </form>

@@ -27,7 +27,10 @@ export default function DataErrorScreen({
     <AuthLayout
       eyebrow="LOCAL DATA ERROR"
       title="KeyNest could not verify your local data."
-      description="The encrypted profile is damaged, incomplete, unsupported, or currently unavailable. KeyNest stayed locked."
+      description={
+        "The encrypted profile is damaged, incomplete, unsupported, or currently " +
+        "unavailable. KeyNest stayed locked."
+      }
     >
       <div className="data-error-actions">
         <button

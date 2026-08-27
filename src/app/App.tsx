@@ -17,10 +17,6 @@ function KeyNestApp() {
   const [activityError, setActivityError] = useState("");
   const { resetToDefaults } = useSettings();
 
-  function openPasswordVault() {
-    alert("The Password Vault page will open here.");
-  }
-
   return (
     <AuthGate onResetComplete={resetToDefaults}>
       {({ lock, resetAuthenticated }) => (
@@ -32,7 +28,6 @@ function KeyNestApp() {
             </p>
           ) : null}
           <AuthenticatedShell
-            onOpenPasswordVault={openPasswordVault}
             onLockKeynest={lock}
             onResetAuthenticated={resetAuthenticated}
           />

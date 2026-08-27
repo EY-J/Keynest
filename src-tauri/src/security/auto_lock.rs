@@ -141,6 +141,7 @@ impl AutoLockService {
         self.record_activity_at(self.supervisor.clock.now());
     }
 
+    #[cfg(test)]
     pub(crate) fn set_timeout(&self, timeout: Duration) -> Result<(), LockError> {
         self.set_timeout_at(timeout, self.supervisor.clock.now(), None)
     }

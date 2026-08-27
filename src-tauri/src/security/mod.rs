@@ -14,8 +14,8 @@ pub(crate) use auto_lock::LockActions;
 pub(crate) use clipboard::ClipboardPort;
 pub(crate) use clipboard::{ClipboardError, ClipboardService, TauriClipboardPort};
 #[cfg(test)]
-pub(crate) use crypto::{CryptoError, EntropySource};
-pub(crate) use crypto::{KdfParams, OsEntropy};
+pub(crate) use crypto::CryptoError;
+pub(crate) use crypto::{EntropySource, KdfParams, OsEntropy};
 #[cfg(test)]
 pub(crate) use locking::LockEventSink;
 pub(crate) use locking::{LockCoordinator, LockError, TauriLockEventSink};

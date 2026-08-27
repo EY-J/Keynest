@@ -17,6 +17,7 @@ use crate::{
         LockError, SecurityOperationGate,
     },
     settings::{SettingsError, SettingsService, SettingsSnapshot},
+    vault::{VaultError, VaultRecord, VaultRecordInput, VaultRecordSummary, VaultService},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -41,6 +42,13 @@ impl PublicIpcError {
         Self::new(
             "internal-error",
             "KeyNest could not complete the security request.",
+        )
+    }
+
+    fn clipboard_copy() -> Self {
+        Self::new(
+            "clipboard-copy-error",
+            "KeyNest could not copy this password.",
         )
     }
 }
@@ -121,6 +129,44 @@ impl From<ClipboardError> for PublicIpcError {
             "clipboard-error",
             "KeyNest could not safely clear its clipboard content.",
         )
+    }
+}
+
+impl From<VaultError> for PublicIpcError {
+    fn from(error: VaultError) -> Self {
+        match error {
+            VaultError::InvalidName => Self::new("invalid-vault-name", "Enter a credential name."),
+            VaultError::InvalidUsername => {
+                Self::new("invalid-vault-username", "Enter a credential username.")
+            }
+            VaultError::InvalidPassword => {
+                Self::new("invalid-vault-password", "Enter a credential password.")
+            }
+            VaultError::InvalidWebsite => {
+                Self::new("invalid-vault-website", "Enter a valid credential website.")
+            }
+            VaultError::InvalidCategory => {
+                Self::new("invalid-vault-category", "Enter a credential category.")
+            }
+            VaultError::InvalidTags => {
+                Self::new("invalid-vault-tags", "Check the credential tags.")
+            }
+            VaultError::NotFound => {
+                Self::new("vault-record-not-found", "The credential was not found.")
+            }
+            VaultError::DataDamaged => Self::new(
+                "vault-data-error",
+                "KeyNest's encrypted vault data is damaged or unsupported.",
+            ),
+            VaultError::EntropyUnavailable => Self::new(
+                "vault-entropy-error",
+                "KeyNest could not generate secure vault data.",
+            ),
+            VaultError::StorageUnavailable => Self::new(
+                "vault-storage-error",
+                "KeyNest could not access its encrypted vault data.",
+            ),
+        }
     }
 }
 
@@ -391,6 +437,86 @@ fn change_master_password_value(
     Ok(auth.status())
 }
 
+fn with_vault_key<T>(
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+    operation: impl FnOnce(&[u8; 32]) -> Result<T, VaultError>,
+) -> Result<T, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.require_vault_key(operation)
+        .map_err(PublicIpcError::from)?
+        .map_err(PublicIpcError::from)
+}
+
+fn list_vault_records_value(
+    auth: &AuthService,
+    vault: &VaultService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<Vec<VaultRecordSummary>, PublicIpcError> {
+    with_vault_key(auth, operation_gate, |vault_key| vault.list(vault_key))
+}
+
+fn create_vault_record_value(
+    input: VaultRecordInput,
+    auth: &AuthService,
+    vault: &VaultService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<VaultRecordSummary, PublicIpcError> {
+    with_vault_key(auth, operation_gate, |vault_key| {
+        vault.create(vault_key, input)
+    })
+}
+
+fn get_vault_record_value(
+    id: &str,
+    auth: &AuthService,
+    vault: &VaultService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<VaultRecord, PublicIpcError> {
+    with_vault_key(auth, operation_gate, |vault_key| vault.get(vault_key, id))
+}
+
+fn update_vault_record_value(
+    id: &str,
+    input: VaultRecordInput,
+    auth: &AuthService,
+    vault: &VaultService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<VaultRecordSummary, PublicIpcError> {
+    with_vault_key(auth, operation_gate, |vault_key| {
+        vault.update(vault_key, id, input)
+    })
+}
+
+fn delete_vault_record_value(
+    id: &str,
+    auth: &AuthService,
+    vault: &VaultService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    with_vault_key(auth, operation_gate, |vault_key| {
+        vault.delete(vault_key, id)
+    })
+}
+
+fn copy_vault_password_value(
+    id: &str,
+    auth: &AuthService,
+    vault: &VaultService,
+    clipboard: &ClipboardService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
+    let password = auth
+        .require_vault_key(|vault_key| vault.password_for_copy(vault_key, id))
+        .map_err(PublicIpcError::from)?
+        .map_err(PublicIpcError::from)?;
+    clipboard
+        .copy_secret(&password)
+        .map_err(|_| PublicIpcError::clipboard_copy())?;
+    Ok(())
+}
+
 fn disable_startup_for_reset(startup: &StartupService) -> Result<(), PublicIpcError> {
     if startup.set_enabled(false)? {
         return Err(StartupError::StateMismatch.into());
@@ -398,6 +524,10 @@ fn disable_startup_for_reset(startup: &StartupService) -> Result<(), PublicIpcEr
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reset transaction requires each security service explicitly"
+)]
 pub(crate) fn reset_authenticated(
     current_password: &str,
     confirmation: &str,
@@ -421,6 +551,10 @@ pub(crate) fn reset_authenticated(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reset transaction and its test hook require explicit dependencies"
+)]
 fn reset_authenticated_with_hook(
     current_password: &str,
     confirmation: &str,
@@ -464,6 +598,10 @@ fn reset_recovery(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reset transaction and its test hook require explicit dependencies"
+)]
 fn reset_recovery_with_hook(
     confirmation: &str,
     auth: &AuthService,
@@ -728,6 +866,10 @@ pub(crate) async fn reset_keynest(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri injects each managed security service as a command argument"
+)]
 pub(crate) async fn reset_keynest_authenticated(
     mut current_password: String,
     mut confirmation: String,
@@ -779,6 +921,110 @@ pub(crate) async fn open_keynest_data_folder(
     .map_err(|_| PublicIpcError::internal())?
 }
 
+#[tauri::command]
+pub(crate) async fn list_vault_records(
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<VaultRecordSummary>, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        list_vault_records_value(&auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn create_vault_record(
+    input: VaultRecordInput,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<VaultRecordSummary, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        create_vault_record_value(input, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn get_vault_record(
+    id: String,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<VaultRecord, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        get_vault_record_value(&id, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn update_vault_record(
+    id: String,
+    input: VaultRecordInput,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<VaultRecordSummary, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        update_vault_record_value(&id, input, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn delete_vault_record(
+    id: String,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_vault_record_value(&id, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn copy_vault_password(
+    id: String,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    clipboard: State<'_, ClipboardService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let clipboard = clipboard.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        copy_vault_password_value(&id, &auth, &vault, &clipboard, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
 #[cfg(test)]
 mod command_tests {
     use std::{
@@ -800,16 +1046,19 @@ mod command_tests {
             ProfileStore,
         },
         settings::{SettingsStore, ThemePreference},
+        vault::VaultService,
     };
 
     const PASSWORD: &str = "a secure master password";
 
-    struct FixedEntropy;
+    #[derive(Default)]
+    struct FixedEntropy(AtomicUsize);
 
     impl EntropySource for FixedEntropy {
         fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            let start = self.0.fetch_add(destination.len(), Ordering::SeqCst) as u8;
             for (index, byte) in destination.iter_mut().enumerate() {
-                *byte = index as u8;
+                *byte = start.wrapping_add(index as u8);
             }
             Ok(())
         }
@@ -865,14 +1114,19 @@ mod command_tests {
     #[derive(Default)]
     struct FakeClipboardPort {
         value: Mutex<String>,
+        fail_write: AtomicBool,
         fail_read: AtomicBool,
         clear_calls: AtomicUsize,
     }
 
     impl ClipboardPort for FakeClipboardPort {
         fn write_text(&self, value: &str) -> Result<(), ClipboardError> {
-            *self.value.lock().unwrap() = value.to_owned();
-            Ok(())
+            if self.fail_write.load(Ordering::SeqCst) {
+                Err(ClipboardError::WriteFailed)
+            } else {
+                *self.value.lock().unwrap() = value.to_owned();
+                Ok(())
+            }
         }
 
         fn read_text(&self) -> Result<String, ClipboardError> {
@@ -918,6 +1172,7 @@ mod command_tests {
         startup: StartupService,
         clipboard_port: Arc<FakeClipboardPort>,
         clipboard: ClipboardService,
+        vault: VaultService,
         operation_gate: SecurityOperationGate,
     }
 
@@ -928,7 +1183,7 @@ mod command_tests {
             let auth = AuthService::load(
                 ProfileStore::new(temp.path().to_path_buf(), params),
                 params,
-                Arc::new(FixedEntropy),
+                Arc::new(FixedEntropy::default()),
             );
             let store = SettingsStore::new(temp.path().to_path_buf());
             let settings = SettingsService::load(store.clone()).unwrap();
@@ -936,6 +1191,8 @@ mod command_tests {
             let startup = StartupService::new(Arc::new(startup_fake.clone()));
             let clipboard_port = Arc::new(FakeClipboardPort::default());
             let clipboard = ClipboardService::new(clipboard_port.clone(), Duration::from_secs(30));
+            let vault =
+                VaultService::new(temp.path().to_path_buf(), Arc::new(FixedEntropy::default()));
             let operation_gate = SecurityOperationGate::new();
             let lock_events = Arc::new(FakeLockEvents::default());
             let coordinator = Arc::new(LockCoordinator::new(
@@ -956,6 +1213,7 @@ mod command_tests {
                 startup,
                 clipboard_port,
                 clipboard,
+                vault,
                 operation_gate,
             }
         }
@@ -988,6 +1246,308 @@ mod command_tests {
                 &self.auto_lock,
                 &self.operation_gate,
             )
+        }
+    }
+
+    fn vault_input(password: &str) -> VaultRecordInput {
+        named_vault_input("Example account", password)
+    }
+
+    fn named_vault_input(name: &str, password: &str) -> VaultRecordInput {
+        VaultRecordInput {
+            name: name.to_owned(),
+            username: "alex@example.test".to_owned(),
+            password: password.to_owned(),
+            website: Some("https://example.test".to_owned()),
+            category: "Personal".to_owned(),
+            tags: vec!["Important".to_owned()],
+        }
+    }
+
+    #[test]
+    fn locked_vault_commands_fail_before_vault_or_clipboard_access() {
+        let fixture = CommandFixture::new();
+        fixture
+            .clipboard_port
+            .value
+            .lock()
+            .unwrap()
+            .push_str("unrelated clipboard text");
+        let input = vault_input("selected password");
+
+        assert_eq!(
+            list_vault_records_value(&fixture.auth, &fixture.vault, &fixture.operation_gate)
+                .unwrap_err()
+                .code,
+            "unauthorized"
+        );
+        assert_eq!(
+            create_vault_record_value(
+                input.clone(),
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
+            "unauthorized"
+        );
+        for result in [
+            get_vault_record_value(
+                "missing",
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate,
+            )
+            .map(|_| ()),
+            update_vault_record_value(
+                "missing",
+                input,
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate,
+            )
+            .map(|_| ()),
+            delete_vault_record_value(
+                "missing",
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate,
+            ),
+            copy_vault_password_value(
+                "missing",
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.clipboard,
+                &fixture.operation_gate,
+            ),
+        ] {
+            assert_eq!(result.unwrap_err().code, "unauthorized");
+        }
+        assert!(!fixture.temp.path().join("vault.enc").exists());
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            "unrelated clipboard text"
+        );
+    }
+
+    #[test]
+    fn vault_create_waiting_behind_a_linearized_lock_rechecks_authorization() {
+        let fixture = CommandFixture::new();
+        create_master_password_and_arm(
+            PASSWORD,
+            &fixture.auth,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let guard = fixture.operation_gate.lock();
+
+        let auth = fixture.auth.clone();
+        let vault = fixture.vault.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let create = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = create_vault_record_value(
+                vault_input("must-never-be-persisted"),
+                &auth,
+                &vault,
+                &operation_gate,
+            );
+            returned_tx.send(()).unwrap();
+            result
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(returned_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+
+        assert_eq!(
+            fixture
+                .auto_lock
+                .lock_now_with_operation_guard(&guard)
+                .unwrap(),
+            AuthStatus::Locked
+        );
+        drop(guard);
+
+        assert_eq!(create.join().unwrap().unwrap_err().code, "unauthorized");
+        assert!(!fixture.temp.path().join("vault.enc").exists());
+    }
+
+    #[test]
+    fn unlocked_vault_commands_round_trip_and_copy_only_the_selected_password() {
+        let fixture = CommandFixture::new();
+        fixture.create_unlocked_profile();
+        let first = create_vault_record_value(
+            vault_input("first password"),
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let second = create_vault_record_value(
+            named_vault_input("Second account", "second selected password"),
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+
+        assert_eq!(
+            list_vault_records_value(&fixture.auth, &fixture.vault, &fixture.operation_gate)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            get_vault_record_value(
+                &first.id,
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate
+            )
+            .unwrap()
+            .password,
+            "first password"
+        );
+        let updated = update_vault_record_value(
+            &first.id,
+            named_vault_input("Updated account", "updated password"),
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert_eq!(updated.name, "Updated account");
+        copy_vault_password_value(
+            &second.id,
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.clipboard,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            "second selected password"
+        );
+        delete_vault_record_value(
+            &first.id,
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert_eq!(
+            get_vault_record_value(
+                &first.id,
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate
+            )
+            .unwrap_err()
+            .code,
+            "vault-record-not-found"
+        );
+    }
+
+    #[test]
+    fn vault_copy_failure_uses_a_fixed_copy_specific_public_error() {
+        let fixture = CommandFixture::new();
+        fixture.create_unlocked_profile();
+        let record = create_vault_record_value(
+            vault_input("selected password"),
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        fixture
+            .clipboard_port
+            .fail_write
+            .store(true, Ordering::SeqCst);
+
+        let error = copy_vault_password_value(
+            &record.id,
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.clipboard,
+            &fixture.operation_gate,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "clipboard-copy-error");
+        assert_eq!(error.message, "KeyNest could not copy this password.");
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            "owned secret"
+        );
+    }
+
+    #[test]
+    fn vault_errors_serialize_to_fixed_safe_values_without_input_content() {
+        let secret = "literal secret that must not escape";
+        let cases = [
+            (
+                VaultError::InvalidName,
+                "invalid-vault-name",
+                "Enter a credential name.",
+            ),
+            (
+                VaultError::InvalidUsername,
+                "invalid-vault-username",
+                "Enter a credential username.",
+            ),
+            (
+                VaultError::InvalidPassword,
+                "invalid-vault-password",
+                "Enter a credential password.",
+            ),
+            (
+                VaultError::InvalidWebsite,
+                "invalid-vault-website",
+                "Enter a valid credential website.",
+            ),
+            (
+                VaultError::InvalidCategory,
+                "invalid-vault-category",
+                "Enter a credential category.",
+            ),
+            (
+                VaultError::InvalidTags,
+                "invalid-vault-tags",
+                "Check the credential tags.",
+            ),
+            (
+                VaultError::NotFound,
+                "vault-record-not-found",
+                "The credential was not found.",
+            ),
+            (
+                VaultError::DataDamaged,
+                "vault-data-error",
+                "KeyNest's encrypted vault data is damaged or unsupported.",
+            ),
+            (
+                VaultError::EntropyUnavailable,
+                "vault-entropy-error",
+                "KeyNest could not generate secure vault data.",
+            ),
+            (
+                VaultError::StorageUnavailable,
+                "vault-storage-error",
+                "KeyNest could not access its encrypted vault data.",
+            ),
+        ];
+
+        for (vault_error, code, message) in cases {
+            let serialized = serde_json::to_string(&PublicIpcError::from(vault_error)).unwrap();
+            assert!(serialized.contains(code));
+            assert!(serialized.contains(message));
+            assert!(!serialized.contains(secret));
         }
     }
 

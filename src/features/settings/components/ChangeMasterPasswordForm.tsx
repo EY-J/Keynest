@@ -86,7 +86,7 @@ export default function ChangeMasterPasswordForm() {
         {error ? <p className="auth-error" role="alert">{error}</p> : null}
         {success ? <p className="security-success" role="status">{success}</p> : null}
         <button className="primary-button" disabled={isSubmitting}>
-          {isSubmitting ? "Changingâ€¦" : "Change master password"}
+          {isSubmitting ? "Changing…" : "Change master password"}
         </button>
       </form>
     </section>

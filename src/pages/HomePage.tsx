@@ -1,10 +1,10 @@
 import BrandMark from "../shared/components/BrandMark";
 
 type HomePageProps = {
-  onOpenPasswordVault: () => void;
+  onNavigateToVault: () => void;
 };
 
-export default function HomePage({ onOpenPasswordVault }: HomePageProps) {
+export default function HomePage({ onNavigateToVault }: HomePageProps) {
   return (
     <>
       <header className="topbar">
@@ -40,7 +40,7 @@ export default function HomePage({ onOpenPasswordVault }: HomePageProps) {
           <button
             className="primary-button"
             type="button"
-            onClick={onOpenPasswordVault}
+            onClick={onNavigateToVault}
           >
             Open Password Vault
           </button>
@@ -68,7 +68,7 @@ export default function HomePage({ onOpenPasswordVault }: HomePageProps) {
               <button
                 className="feature-button"
                 type="button"
-                onClick={onOpenPasswordVault}
+                onClick={onNavigateToVault}
               >
                 Open Vault
                 <span>→</span>
