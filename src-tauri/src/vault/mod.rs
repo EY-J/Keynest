@@ -66,7 +66,6 @@ mod tests {
             username: "alex@example.test".to_owned(),
             password: "correct horse battery staple".to_owned(),
             website: Some("https://example.test".to_owned()),
-            category: "Personal".to_owned(),
             tags: vec!["Important".to_owned()],
         }
     }
@@ -112,6 +111,44 @@ mod tests {
     }
 
     #[test]
+    fn release_reopen_preserves_existing_encrypted_vault_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = service(temp.path().to_path_buf());
+        let record = original.create(&vault_key(), input()).unwrap();
+        drop(original);
+        let path = temp.path().join("vault.enc");
+        let before = fs::read(&path).unwrap();
+        let reopened = service(temp.path().to_path_buf());
+        assert_eq!(reopened.list(&vault_key()).unwrap().len(), 1);
+        assert_eq!(
+            reopened.get(&vault_key(), &record.id).unwrap().password,
+            input().password
+        );
+        drop(reopened);
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn release_reader_rejects_future_schema_without_resetting_data() {
+        let temp = tempfile::tempdir().unwrap();
+        service(temp.path().to_path_buf())
+            .create(&vault_key(), input())
+            .unwrap();
+        let path = temp.path().join("vault.enc");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch("PRAGMA user_version = 999;")
+            .unwrap();
+        drop(connection);
+        let before = fs::read(&path).unwrap();
+        assert_eq!(
+            service(temp.path().to_path_buf()).list(&vault_key()),
+            Err(VaultError::DataDamaged)
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
     fn secret_bearing_dtos_zeroize_and_redact_debug_output() {
         fn assert_zeroizing<T: zeroize::Zeroize + zeroize::ZeroizeOnDrop>() {}
 
@@ -126,7 +163,6 @@ mod tests {
             username: "debug-secret-username".to_owned(),
             password: "debug-secret-password".to_owned(),
             website: Some("debug-secret-website".to_owned()),
-            category: "debug-secret-category".to_owned(),
             tags: vec!["debug-secret-tag".to_owned()],
         };
         let input_debug = format!("{secret_input:?}");
@@ -137,7 +173,6 @@ mod tests {
             "debug-secret-username",
             "debug-secret-password",
             "debug-secret-website",
-            "debug-secret-category",
             "debug-secret-tag",
         ] {
             assert!(!input_debug.contains(secret), "input Debug leaked {secret}");
@@ -153,7 +188,6 @@ mod tests {
             "debug-secret-username",
             "debug-secret-password",
             "debug-secret-website",
-            "debug-secret-category",
             "debug-secret-tag",
         ] {
             assert!(
@@ -247,16 +281,6 @@ mod tests {
                 "2049-character website",
                 input_with!(website: Some("w".repeat(2049))),
                 VaultError::InvalidWebsite,
-            ),
-            (
-                "empty category",
-                input_with!(category: String::new()),
-                VaultError::InvalidCategory,
-            ),
-            (
-                "101-character category",
-                input_with!(category: "c".repeat(101)),
-                VaultError::InvalidCategory,
             ),
             (
                 "21 tags",
@@ -387,7 +411,6 @@ mod tests {
                     username: "literal-vault-username".to_owned(),
                     password: "literal-vault-password".to_owned(),
                     website: Some("literal-vault-website".to_owned()),
-                    category: "literal-vault-category".to_owned(),
                     tags: vec!["literal-vault-tag".to_owned()],
                 },
             )
@@ -400,7 +423,6 @@ mod tests {
             "literal-vault-username",
             "literal-vault-password",
             "literal-vault-website",
-            "literal-vault-category",
             "literal-vault-tag",
         ] {
             assert!(

@@ -4,9 +4,10 @@ mod clipboard;
 mod crypto;
 mod locking;
 mod operation;
+mod password_policy;
 mod storage;
 
-pub(crate) use auth::{AuthError, AuthService, AuthStatus};
+pub(crate) use auth::{AuthError, AuthService, AuthStatus, RecoveryStatus};
 pub(crate) use auto_lock::AutoLockService;
 #[cfg(test)]
 pub(crate) use auto_lock::LockActions;

@@ -41,7 +41,7 @@ export default function DataErrorScreen({
           {isRetrying ? "Checking…" : "Try again"}
         </button>
         <button
-          className="auth-reset-link danger-text"
+          className="auth-reset-link danger-text keynest-button--text"
           type="button"
           onClick={() => setIsResetOpen(true)}
         >

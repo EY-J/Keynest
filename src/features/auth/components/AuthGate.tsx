@@ -24,6 +24,24 @@ export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
   const [status, setStatus] = useState<GateState>("checking");
   const [lockError, setLockError] = useState("");
   const [hasLockListener, setHasLockListener] = useState(false);
+  const [lockEpoch, setLockEpoch] = useState(0);
+
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    let pending = false;
+    function shortcut(event: KeyboardEvent) {
+      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey
+        || event.isComposing || event.key.toLowerCase() !== "l") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat || pending) return;
+      pending = true;
+      // Same backend lock path as the menu, including operation gating and errors.
+      void lock().finally(() => { pending = false; });
+    }
+    window.addEventListener("keydown", shortcut, true);
+    return () => window.removeEventListener("keydown", shortcut, true);
+  }, [status]);
 
   const refreshStatus = useCallback(async () => {
     setStatus("checking");
@@ -45,11 +63,8 @@ export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
   }, [refreshStatus]);
 
   useEffect(() => {
-    if (status !== "unlocked") {
-      return;
-    }
-
     let isCurrent = true;
+    let lockReceived = false;
     let unlisten: (() => void) | undefined;
     setHasLockListener(false);
 
@@ -57,7 +72,10 @@ export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
       if (!isCurrent) {
         return;
       }
+      lockReceived = true;
       setLockError("");
+      setHasLockListener(false);
+      setLockEpoch((epoch) => epoch + 1);
       setStatus("locked");
     })
       .then((nextUnlisten) => {
@@ -68,13 +86,15 @@ export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
         unlisten = nextUnlisten;
         return authClient.getStatus().then(
           (nextStatus) => {
-            if (!isCurrent) {
+            if (!isCurrent || lockReceived) {
               return;
             }
             if (nextStatus === "unlocked") {
-              setHasLockListener(true);
+              // Setup/recovery must finish displaying the replacement key first.
+              if (status === "unlocked") setHasLockListener(true);
               return;
             }
+            if (nextStatus === "locked") setLockEpoch((epoch) => epoch + 1);
             setStatus(isAuthStatus(nextStatus) ? nextStatus : "data-error");
           },
           () => {
@@ -176,6 +196,7 @@ export default function AuthGate({ children, onResetComplete }: AuthGateProps) {
     case "locked":
       return (
         <UnlockScreen
+          key={lockEpoch}
           onUnlocked={() => {
             setHasLockListener(false);
             setStatus("unlocked");

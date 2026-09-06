@@ -11,30 +11,12 @@ type VaultRecordFormProps = {
   initialFocusRef?: RefObject<HTMLInputElement | null>;
 };
 
-type RequiredField = "name" | "username" | "password" | "category";
-
-const VAULT_CATEGORIES = [
-  "Personal",
-  "Email",
-  "Social Media",
-  "Finance",
-  "Work",
-  "Shopping",
-  "Developer",
-  "Network",
-  "Government",
-  "Gaming",
-  "Entertainment",
-  "Travel",
-  "Utilities",
-  "Other",
-] as const;
+type RequiredField = "name" | "username" | "password";
 
 const FIELD_ERROR_IDS: Record<RequiredField, string> = {
   name: "vault-name-error",
   username: "vault-username-error",
   password: "vault-password-error",
-  category: "vault-category-error",
 };
 
 function normalizeTags(value: string) {
@@ -136,7 +118,6 @@ export default function VaultRecordForm({
   const [username, setUsername] = useState(initialRecord?.username ?? "");
   const [password, setPassword] = useState(initialRecord?.password ?? "");
   const [website, setWebsite] = useState(initialRecord?.website ?? "");
-  const [category, setCategory] = useState(initialRecord?.category ?? "");
   const [tags, setTags] = useState(initialRecord?.tags.join(", ") ?? "");
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
   const [formError, setFormError] = useState("");
@@ -144,13 +125,6 @@ export default function VaultRecordForm({
   const [showPassword, setShowPassword] = useState(false);
   const isMounted = useRef(true);
   const submissionId = useRef(0);
-  const categoryOptions =
-    initialRecord?.category &&
-    !VAULT_CATEGORIES.includes(
-      initialRecord.category as (typeof VAULT_CATEGORIES)[number],
-    )
-      ? [initialRecord.category, ...VAULT_CATEGORIES]
-      : VAULT_CATEGORIES;
 
   useEffect(() => {
     isMounted.current = true;
@@ -159,13 +133,26 @@ export default function VaultRecordForm({
     };
   }, []);
 
+  useEffect(() => {
+    if (!showPassword) return;
+    const timer = window.setTimeout(() => setShowPassword(false), 12_000);
+    function hide() { setShowPassword(false); }
+    function hideWhenBackgrounded() { if (document.hidden) hide(); }
+    window.addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", hideWhenBackgrounded);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("visibilitychange", hideWhenBackgrounded);
+    };
+  }, [showPassword]);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const validationErrors: Partial<Record<RequiredField, string>> = {};
     if (!name.trim()) validationErrors.name = "Enter a credential name.";
     if (!username.trim()) validationErrors.username = "Enter a username or email.";
     if (!password) validationErrors.password = "Enter a password.";
-    if (!category.trim()) validationErrors.category = "Enter a credential category.";
     if (Object.keys(validationErrors).length) {
       setFieldErrors(validationErrors);
       setFormError("");
@@ -183,7 +170,6 @@ export default function VaultRecordForm({
         username: username.trim(),
         password,
         website: website.trim() || null,
-        category: category.trim(),
         tags: normalizeTags(tags),
       });
     } catch {
@@ -277,7 +263,7 @@ export default function VaultRecordForm({
           {/* Generator trigger */}
           <button
             type="button"
-            className="vault-pw-icon-btn"
+            className="vault-pw-icon-btn keynest-button--icon-primary"
             onClick={handleGeneratePassword}
             aria-label="Generate password"
             title="Generate a strong password"
@@ -309,31 +295,6 @@ export default function VaultRecordForm({
           disabled={isSubmitting}
         />
       </label>
-      <div className="vault-form-field">
-        <label htmlFor="vault-category">Category</label>
-        <select
-          id="vault-category"
-          value={category}
-          onChange={(event) => setCategory(event.target.value)}
-          disabled={isSubmitting}
-          aria-invalid={Boolean(fieldErrors.category)}
-          aria-describedby={
-            fieldErrors.category ? FIELD_ERROR_IDS.category : undefined
-          }
-        >
-          <option value="">Select a category</option>
-          {categoryOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-        {fieldErrors.category ? (
-          <span id={FIELD_ERROR_IDS.category} className="vault-field-error">
-            {fieldErrors.category}
-          </span>
-        ) : null}
-      </div>
       <label>
         <span>Tags (comma-separated)</span>
         <input

@@ -1,12 +1,15 @@
 import { useRef, useState } from "react";
+import { Clipboard, Lock, Monitor, Trash2 } from "lucide-react";
 import { useSettings } from "../SettingsProvider";
 import type { AutoLockSeconds, ClipboardClearSeconds } from "../types";
 import AuthenticatedResetDialog from "./AuthenticatedResetDialog";
 import ChangeMasterPasswordForm from "./ChangeMasterPasswordForm";
+import RecoverySettings from "./RecoverySettings";
+import SettingsRow from "./SettingsRow";
 
 const SAVE_ERROR = "KeyNest could not save this security preference.";
 
-type SecurityControl = "auto-lock" | "clipboard";
+type SecurityControl = "auto-lock" | "clipboard" | "sleep-lock";
 
 type SecuritySettingsProps = {
   onResetAuthenticated: (
@@ -22,18 +25,22 @@ export default function SecuritySettings({
     settings,
     setAutoLockSeconds,
     setClipboardClearSeconds,
+    setLockOnSleep,
   } = useSettings();
   const requestIds = useRef<Record<SecurityControl, number>>({
     "auto-lock": 0,
     clipboard: 0,
+    "sleep-lock": 0,
   });
   const [isSaving, setIsSaving] = useState<Record<SecurityControl, boolean>>({
     "auto-lock": false,
     clipboard: false,
+    "sleep-lock": false,
   });
   const [errors, setErrors] = useState({
     "auto-lock": "",
     clipboard: "",
+    "sleep-lock": "",
   });
   const [isResetOpen, setIsResetOpen] = useState(false);
 
@@ -66,65 +73,122 @@ export default function SecuritySettings({
     await save("clipboard", () => setClipboardClearSeconds(value));
   }
 
+  async function saveLockOnSleep(enabled: boolean) {
+    await save("sleep-lock", () => setLockOnSleep(enabled));
+  }
+
   return (
     <div className="security-settings">
-      <div className="security-setting">
-        <label htmlFor="auto-lock-seconds">Lock KeyNest after inactivity</label>
-        <select
-          id="auto-lock-seconds"
-          value={settings.autoLockSeconds}
-          disabled={isSaving["auto-lock"]}
-          onChange={(event) =>
-            void saveAutoLock(Number(event.target.value) as AutoLockSeconds)
-          }
+      <div className="settings-row-list">
+        <SettingsRow
+          icon={Lock}
+          title="Auto Lock"
         >
-          <option value="60">1 minute</option>
-          <option value="300">5 minutes</option>
-          <option value="900">15 minutes</option>
-          <option value="1800">30 minutes</option>
-        </select>
-        {errors["auto-lock"] ? (
-          <p role="alert">{errors["auto-lock"]}</p>
-        ) : null}
+          <div className="settings-control-stack">
+            <label className="sr-only" htmlFor="auto-lock-seconds">
+              Auto Lock duration
+            </label>
+            <select
+              id="auto-lock-seconds"
+              value={settings.autoLockSeconds}
+              disabled={isSaving["auto-lock"]}
+              onChange={(event) =>
+                void saveAutoLock(Number(event.target.value) as AutoLockSeconds)
+              }
+            >
+              <option value="60">1 minute</option>
+              <option value="300">5 minutes</option>
+              <option value="900">15 minutes</option>
+              <option value="1800">30 minutes</option>
+            </select>
+            {errors["auto-lock"] ? (
+              <span className="settings-inline-error" role="alert">
+                {errors["auto-lock"]}
+              </span>
+            ) : null}
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          icon={Clipboard}
+          title="Clipboard"
+        >
+          <div className="settings-control-stack">
+            <label className="sr-only" htmlFor="clipboard-clear-seconds">
+              Clipboard clearing delay
+            </label>
+            <select
+              id="clipboard-clear-seconds"
+              value={settings.clipboardClearSeconds}
+              disabled={isSaving.clipboard}
+              onChange={(event) =>
+                void saveClipboardClear(
+                  Number(event.target.value) as ClipboardClearSeconds,
+                )
+              }
+            >
+              <option value="10">10 seconds</option>
+              <option value="30">30 seconds</option>
+              <option value="60">60 seconds</option>
+            </select>
+            {errors.clipboard ? (
+              <span className="settings-inline-error" role="alert">
+                {errors.clipboard}
+              </span>
+            ) : null}
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          icon={Monitor}
+          title="Windows Sleep"
+        >
+          <div className="settings-control-stack">
+            <label className="settings-switch">
+              <input
+                type="checkbox"
+                checked={settings.lockOnSleep}
+                disabled={isSaving["sleep-lock"]}
+                onChange={(event) => void saveLockOnSleep(event.target.checked)}
+                aria-label="Lock KeyNest when Windows sleeps"
+              />
+              <span aria-hidden="true" />
+            </label>
+            {errors["sleep-lock"] ? (
+              <span className="settings-inline-error" role="alert">
+                {errors["sleep-lock"]}
+              </span>
+            ) : null}
+          </div>
+        </SettingsRow>
       </div>
 
-      <div className="security-setting">
-        <label htmlFor="clipboard-clear-seconds">Clear clipboard after</label>
-        <select
-          id="clipboard-clear-seconds"
-          value={settings.clipboardClearSeconds}
-          disabled={isSaving.clipboard}
-          onChange={(event) =>
-            void saveClipboardClear(
-              Number(event.target.value) as ClipboardClearSeconds,
-            )
-          }
-        >
-          <option value="10">10 seconds</option>
-          <option value="30">30 seconds</option>
-          <option value="60">60 seconds</option>
-        </select>
-        {errors.clipboard ? <p role="alert">{errors.clipboard}</p> : null}
+      <p className="settings-group-label">RECOVERY</p>
+      <div className="settings-row-list">
+        <RecoverySettings />
       </div>
 
-      <div className="security-setting">
-        <p>Lock when Windows sleeps</p>
-        <p>Enabled</p>
+      <p className="settings-group-label">ACCESS</p>
+      <div className="settings-row-list">
+        <ChangeMasterPasswordForm />
       </div>
 
-      <ChangeMasterPasswordForm />
-
-      <section className="security-reset" aria-labelledby="reset-keynest-settings-title">
-        <h3 id="reset-keynest-settings-title">Reset KeyNest</h3>
-        <p>Permanently erase this device&apos;s encrypted KeyNest data.</p>
-        <button
-          className="danger-button"
-          type="button"
-          onClick={() => setIsResetOpen(true)}
+      <p className="settings-group-label settings-danger-label">DANGER ZONE</p>
+      <div className="settings-row-list">
+        <SettingsRow
+          icon={Trash2}
+          title="Reset KeyNest"
+          className="settings-row-danger"
         >
-          Reset KeyNest
-        </button>
-      </section>
+          <button
+            className="danger-button compact-button"
+            type="button"
+            onClick={() => setIsResetOpen(true)}
+          >
+            Reset
+          </button>
+        </SettingsRow>
+      </div>
 
       <AuthenticatedResetDialog
         isOpen={isResetOpen}

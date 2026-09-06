@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import Modal, { useModalClose } from "../../../shared/components/Modal/Modal";
 
 type ResetDialogProps = {
   isOpen: boolean;
@@ -16,23 +17,15 @@ export default function ResetDialog({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const modal = useModalClose(onClose);
+
   useEffect(() => {
     if (!isOpen) {
       setConfirmation("");
       setError("");
       return;
     }
-    inputRef.current?.focus();
-
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape" && !isSubmitting) {
-        onClose();
-      }
-    }
-
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isOpen, isSubmitting, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) {
     return null;
@@ -61,13 +54,9 @@ export default function ResetDialog({
   }
 
   return (
-    <div className="reset-dialog-backdrop">
-      <section
-        className="reset-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reset-dialog-title"
-      >
+    <Modal className="reset-dialog" width={440}
+      titleId="reset-dialog-title" closing={modal.closing} onClose={() => modal.close()}
+      onExitComplete={modal.finishClose} pending={isSubmitting} initialFocusRef={inputRef}>
         <p className="auth-eyebrow danger-text">DESTRUCTIVE RESET</p>
         <h2 id="reset-dialog-title">Reset KeyNest?</h2>
         <p>
@@ -95,7 +84,7 @@ export default function ResetDialog({
           ) : null}
 
           <div className="reset-dialog-actions">
-            <button type="button" disabled={isSubmitting} onClick={onClose}>
+            <button className="keynest-button--secondary" type="button" disabled={isSubmitting} onClick={() => modal.close()}>
               Cancel
             </button>
             <button
@@ -106,7 +95,6 @@ export default function ResetDialog({
             </button>
           </div>
         </form>
-      </section>
-    </div>
+    </Modal>
   );
 }

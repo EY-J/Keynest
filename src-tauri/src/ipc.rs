@@ -8,13 +8,13 @@ use std::{
 use serde::Serialize;
 use tauri::State;
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     platform::startup::{StartupError, StartupService},
     security::{
         AuthError, AuthService, AuthStatus, AutoLockService, ClipboardError, ClipboardService,
-        LockError, SecurityOperationGate,
+        LockError, RecoveryStatus, SecurityOperationGate,
     },
     settings::{SettingsError, SettingsService, SettingsSnapshot},
     vault::{VaultError, VaultRecord, VaultRecordInput, VaultRecordSummary, VaultService},
@@ -27,6 +27,46 @@ pub(crate) struct PublicIpcError {
     pub(crate) message: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) retry_after_ms: Option<u64>,
+}
+
+#[derive(PartialEq, Eq, Serialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecoveryKeyResult {
+    #[zeroize(skip)]
+    pub(crate) status: AuthStatus,
+    pub(crate) recovery_key: String,
+}
+
+impl std::fmt::Debug for RecoveryKeyResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RecoveryKeyResult")
+            .field("status", &self.status)
+            .field("recovery_key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod secret_response_tests {
+    use super::*;
+
+    #[test]
+    fn recovery_response_is_redacted_and_zeroizes_without_changing_wire_contract() {
+        fn assert_wipes_on_drop<T: Zeroize + ZeroizeOnDrop>() {}
+        assert_wipes_on_drop::<RecoveryKeyResult>();
+        let mut result = RecoveryKeyResult {
+            status: AuthStatus::Unlocked,
+            recovery_key: "fixture-only-secret".into(),
+        };
+        assert!(!format!("{result:?}").contains("fixture-only-secret"));
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["recoveryKey"],
+            "fixture-only-secret"
+        );
+        result.zeroize();
+        assert!(result.recovery_key.is_empty());
+    }
 }
 
 impl PublicIpcError {
@@ -51,6 +91,13 @@ impl PublicIpcError {
             "KeyNest could not copy this password.",
         )
     }
+
+    fn recovery_clipboard_copy() -> Self {
+        Self::new(
+            "clipboard-copy-error",
+            "KeyNest could not copy the Recovery Key.",
+        )
+    }
 }
 
 impl From<AuthError> for PublicIpcError {
@@ -58,6 +105,9 @@ impl From<AuthError> for PublicIpcError {
         match error {
             AuthError::PasswordTooShort => {
                 Self::new("password-too-short", "Use at least 12 characters.")
+            }
+            AuthError::PasswordTooWeak => {
+                Self::new("password-too-weak", "Master Password is too weak.")
             }
             AuthError::AlreadyInitialized => Self::new(
                 "already-initialized",
@@ -69,6 +119,13 @@ impl From<AuthError> for PublicIpcError {
             ),
             AuthError::InvalidCredentials => {
                 Self::new("invalid-credentials", "The master password is incorrect.")
+            }
+            AuthError::RecoveryNotConfigured => Self::new(
+                "recovery-not-configured",
+                "This KeyNest profile does not have a Recovery Key yet.",
+            ),
+            AuthError::InvalidRecoveryKey => {
+                Self::new("invalid-recovery-key", "The Recovery Key is incorrect.")
             }
             AuthError::Throttled { retry_after_ms } => Self {
                 code: "throttled",
@@ -144,9 +201,6 @@ impl From<VaultError> for PublicIpcError {
             }
             VaultError::InvalidWebsite => {
                 Self::new("invalid-vault-website", "Enter a valid credential website.")
-            }
-            VaultError::InvalidCategory => {
-                Self::new("invalid-vault-category", "Enter a credential category.")
             }
             VaultError::InvalidTags => {
                 Self::new("invalid-vault-tags", "Check the credential tags.")
@@ -244,6 +298,7 @@ fn require_unlocked(auth: &AuthService) -> Result<(), AuthError> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn create_master_password_and_arm(
     password: &str,
     auth: &AuthService,
@@ -253,6 +308,7 @@ pub(crate) fn create_master_password_and_arm(
     create_master_password_and_arm_with_hook(password, auth, auto_lock, operation_gate, || {})
 }
 
+#[cfg(test)]
 fn create_master_password_and_arm_with_hook(
     password: &str,
     auth: &AuthService,
@@ -265,6 +321,82 @@ fn create_master_password_and_arm_with_hook(
     after_create();
     auto_lock.arm();
     Ok(auth.status())
+}
+
+fn create_master_password_for_recovery(
+    password: &str,
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<RecoveryKeyResult, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    let recovery_key = auth.create_master_password(password)?;
+    Ok(RecoveryKeyResult {
+        status: auth.status(),
+        recovery_key: recovery_key.to_string(),
+    })
+}
+
+fn finish_recovery_key_display(
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<AuthStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    require_unlocked(auth)?;
+    auto_lock.arm();
+    Ok(auth.status())
+}
+
+fn recovery_status_value(
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<RecoveryStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.recovery_status().map_err(Into::into)
+}
+
+fn recover_master_password_value(
+    recovery_key: &str,
+    new_password: &str,
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<RecoveryKeyResult, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    let replacement_key = auth.recover_master_password(recovery_key, new_password)?;
+    Ok(RecoveryKeyResult {
+        status: auth.status(),
+        recovery_key: replacement_key.to_string(),
+    })
+}
+
+fn regenerate_recovery_key_value(
+    current_password: &str,
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<RecoveryKeyResult, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    let recovery_key = auth.regenerate_recovery_key(current_password)?;
+    // The new key exists nowhere else, so pause automatic locking until the UI confirms
+    // the user has had an opportunity to save it.
+    auto_lock.disarm();
+    Ok(RecoveryKeyResult {
+        status: auth.status(),
+        recovery_key: recovery_key.to_string(),
+    })
+}
+
+fn copy_recovery_key_value(
+    recovery_key: &str,
+    auth: &AuthService,
+    clipboard: &ClipboardService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
+    require_unlocked(auth)?;
+    clipboard
+        .copy_secret(recovery_key)
+        .map_err(|_| PublicIpcError::recovery_clipboard_copy())
 }
 
 pub(crate) fn unlock_and_arm(
@@ -389,6 +521,19 @@ fn set_clipboard_clear_value_with_hook(
     settings_snapshot(settings, startup)
 }
 
+fn set_lock_on_sleep_value(
+    enabled: bool,
+    auth: &AuthService,
+    settings: &SettingsService,
+    startup: &StartupService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<SettingsSnapshot, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    require_unlocked(auth)?;
+    settings.set_lock_on_sleep(enabled)?;
+    settings_snapshot(settings, startup)
+}
+
 fn set_theme_value(
     theme: &str,
     auth: &AuthService,
@@ -474,6 +619,20 @@ fn get_vault_record_value(
     operation_gate: &SecurityOperationGate,
 ) -> Result<VaultRecord, PublicIpcError> {
     with_vault_key(auth, operation_gate, |vault_key| vault.get(vault_key, id))
+}
+
+fn get_vault_record_summary_value(
+    id: &str,
+    auth: &AuthService,
+    vault: &VaultService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<VaultRecordSummary, PublicIpcError> {
+    with_vault_key(auth, operation_gate, |key| {
+        // Decryption stays here; the temporary full DTO wipes itself on drop.
+        vault
+            .get(key, id)
+            .map(|record| VaultRecordSummary::from(&record))
+    })
 }
 
 fn update_vault_record_value(
@@ -635,7 +794,24 @@ pub(crate) fn get_auth_status(auth: State<'_, AuthService>) -> AuthStatus {
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn create_master_password(
-    mut password: String,
+    password: String,
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<RecoveryKeyResult, PublicIpcError> {
+    let mut password = Zeroizing::new(password);
+    let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = create_master_password_for_recovery(&password, &auth, &operation_gate);
+        password.zeroize();
+        result
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn complete_recovery_key_display(
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
     operation_gate: State<'_, SecurityOperationGate>,
@@ -644,9 +820,82 @@ pub(crate) async fn create_master_password(
     let auto_lock = auto_lock.inner().clone();
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = create_master_password_and_arm(&password, &auth, &auto_lock, &operation_gate);
-        password.zeroize();
-        result.map_err(Into::into)
+        finish_recovery_key_display(&auth, &auto_lock, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn get_recovery_status(
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<RecoveryStatus, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || recovery_status_value(&auth, &operation_gate))
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn recover_master_password(
+    recovery_key: String,
+    new_password: String,
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<RecoveryKeyResult, PublicIpcError> {
+    let mut recovery_key = Zeroizing::new(recovery_key);
+    let mut new_password = Zeroizing::new(new_password);
+    let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result =
+            recover_master_password_value(&recovery_key, &new_password, &auth, &operation_gate);
+        recovery_key.zeroize();
+        new_password.zeroize();
+        result
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn regenerate_recovery_key(
+    current_password: String,
+    auth: State<'_, AuthService>,
+    auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<RecoveryKeyResult, PublicIpcError> {
+    let mut current_password = Zeroizing::new(current_password);
+    let auth = auth.inner().clone();
+    let auto_lock = auto_lock.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result =
+            regenerate_recovery_key_value(&current_password, &auth, &auto_lock, &operation_gate);
+        current_password.zeroize();
+        result
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn copy_recovery_key(
+    recovery_key: String,
+    auth: State<'_, AuthService>,
+    clipboard: State<'_, ClipboardService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let mut recovery_key = Zeroizing::new(recovery_key);
+    let auth = auth.inner().clone();
+    let clipboard = clipboard.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = copy_recovery_key_value(&recovery_key, &auth, &clipboard, &operation_gate);
+        recovery_key.zeroize();
+        result
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -654,11 +903,12 @@ pub(crate) async fn create_master_password(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn unlock(
-    mut password: String,
+    password: String,
     auth: State<'_, AuthService>,
     auto_lock: State<'_, AutoLockService>,
     operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
+    let mut password = Zeroizing::new(password);
     let auth = auth.inner().clone();
     let auto_lock = auto_lock.inner().clone();
     let operation_gate = operation_gate.inner().clone();
@@ -761,6 +1011,25 @@ pub(crate) async fn set_clipboard_clear_seconds(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn set_lock_on_sleep(
+    enabled: bool,
+    auth: State<'_, AuthService>,
+    settings: State<'_, SettingsService>,
+    startup: State<'_, StartupService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<SettingsSnapshot, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let settings = settings.inner().clone();
+    let startup = startup.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        set_lock_on_sleep_value(enabled, &auth, &settings, &startup, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn set_theme(
     theme: String,
     auth: State<'_, AuthService>,
@@ -814,11 +1083,13 @@ pub(crate) async fn record_activity(
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn change_master_password(
-    mut current_password: String,
-    mut new_password: String,
+    current_password: String,
+    new_password: String,
     auth: State<'_, AuthService>,
     operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
+    let mut current_password = Zeroizing::new(current_password);
+    let mut new_password = Zeroizing::new(new_password);
     let auth = auth.inner().clone();
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -871,7 +1142,7 @@ pub(crate) async fn reset_keynest(
     reason = "Tauri injects each managed security service as a command argument"
 )]
 pub(crate) async fn reset_keynest_authenticated(
-    mut current_password: String,
+    current_password: String,
     mut confirmation: String,
     auth: State<'_, AuthService>,
     startup: State<'_, StartupService>,
@@ -880,6 +1151,7 @@ pub(crate) async fn reset_keynest_authenticated(
     auto_lock: State<'_, AutoLockService>,
     operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
+    let mut current_password = Zeroizing::new(current_password);
     let auth = auth.inner().clone();
     let startup = startup.inner().clone();
     let clipboard = clipboard.inner().clone();
@@ -949,6 +1221,23 @@ pub(crate) async fn create_vault_record(
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         create_vault_record_value(input, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn get_vault_record_summary(
+    id: String,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<VaultRecordSummary, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        get_vault_record_summary_value(&id, &auth, &vault, &operation_gate)
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -1181,7 +1470,7 @@ mod command_tests {
             let temp = tempdir().unwrap();
             let params = KdfParams::testing();
             let auth = AuthService::load(
-                ProfileStore::new(temp.path().to_path_buf(), params),
+                ProfileStore::new(temp.path().to_path_buf()),
                 params,
                 Arc::new(FixedEntropy::default()),
             );
@@ -1259,7 +1548,6 @@ mod command_tests {
             username: "alex@example.test".to_owned(),
             password: password.to_owned(),
             website: Some("https://example.test".to_owned()),
-            category: "Personal".to_owned(),
             tags: vec!["Important".to_owned()],
         }
     }
@@ -1293,6 +1581,13 @@ mod command_tests {
             "unauthorized"
         );
         for result in [
+            get_vault_record_summary_value(
+                "missing",
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.operation_gate,
+            )
+            .map(|_| ()),
             get_vault_record_value(
                 "missing",
                 &fixture.auth,
@@ -1395,6 +1690,18 @@ mod command_tests {
             &fixture.operation_gate,
         )
         .unwrap();
+
+        let detail = get_vault_record_summary_value(
+            &first.id,
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let wire = serde_json::to_value(&detail).unwrap();
+        assert_eq!(detail.id, first.id);
+        assert!(wire.get("password").is_none());
+        assert!(!wire.to_string().contains("first password"));
 
         assert_eq!(
             list_vault_records_value(&fixture.auth, &fixture.vault, &fixture.operation_gate)
@@ -1512,11 +1819,6 @@ mod command_tests {
                 "Enter a valid credential website.",
             ),
             (
-                VaultError::InvalidCategory,
-                "invalid-vault-category",
-                "Enter a credential category.",
-            ),
-            (
                 VaultError::InvalidTags,
                 "invalid-vault-tags",
                 "Check the credential tags.",
@@ -1629,12 +1931,132 @@ mod command_tests {
     }
 
     #[test]
+    fn all_master_password_commands_enforce_the_shared_policy_vectors() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/master-password-policy.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let password = case["password"].as_str().unwrap();
+            let allowed = case["strength"].as_str().unwrap() != "Weak";
+            let setup = CommandFixture::new();
+            let result =
+                create_master_password_for_recovery(password, &setup.auth, &setup.operation_gate);
+            assert_eq!(result.is_ok(), allowed, "setup case {}", case["id"]);
+            if !allowed {
+                assert_eq!(setup.auth.status(), AuthStatus::SetupRequired);
+                assert!(!setup.temp.path().join("profile.json").exists());
+            } else {
+                setup.auth.lock();
+                setup.auth.unlock(password).unwrap();
+            }
+
+            let fixture = CommandFixture::new();
+            let recovery_key = fixture.auth.create_master_password(PASSWORD).unwrap();
+            let before_key = fixture.auth.require_vault_key(|key| *key).unwrap();
+            let profile_path = fixture.temp.path().join("profile.json");
+            let before_profile = std::fs::read(&profile_path).unwrap();
+            let result = change_master_password_value(
+                PASSWORD,
+                password,
+                &fixture.auth,
+                &fixture.operation_gate,
+            );
+            assert_eq!(result.is_ok(), allowed, "change case {}", case["id"]);
+            if !allowed {
+                assert_eq!(std::fs::read(&profile_path).unwrap(), before_profile);
+            }
+            assert_eq!(
+                fixture.auth.require_vault_key(|key| *key).unwrap(),
+                before_key
+            );
+
+            let before_profile = std::fs::read(&profile_path).unwrap();
+            fixture.auth.lock();
+            let result = recover_master_password_value(
+                &recovery_key,
+                password,
+                &fixture.auth,
+                &fixture.operation_gate,
+            );
+            assert_eq!(result.is_ok(), allowed, "recovery case {}", case["id"]);
+            if !allowed {
+                assert_eq!(fixture.auth.status(), AuthStatus::Locked);
+                assert_eq!(std::fs::read(&profile_path).unwrap(), before_profile);
+                fixture.auth.unlock(PASSWORD).unwrap();
+            } else {
+                fixture.auth.lock();
+                fixture.auth.unlock(password).unwrap();
+            }
+            assert_eq!(
+                fixture.auth.require_vault_key(|key| *key).unwrap(),
+                before_key
+            );
+        }
+    }
+
+    #[test]
+    fn direct_password_change_rejects_weak_passwords_without_mutation() {
+        let fixture = CommandFixture::new();
+        fixture.create_unlocked_profile();
+        let profile_path = fixture.temp.path().join("profile.json");
+        let before_profile = std::fs::read(&profile_path).unwrap();
+        let before_key = fixture.auth.require_vault_key(|key| *key).unwrap();
+        for weak in ["123456789012", "password1234", "111111111111"] {
+            let error = change_master_password_value(
+                PASSWORD,
+                weak,
+                &fixture.auth,
+                &fixture.operation_gate,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "password-too-weak");
+            assert_eq!(error.message, "Master Password is too weak.");
+            assert_eq!(std::fs::read(&profile_path).unwrap(), before_profile);
+            assert_eq!(
+                fixture.auth.require_vault_key(|key| *key).unwrap(),
+                before_key
+            );
+        }
+        fixture.auth.lock();
+        fixture.auth.unlock(PASSWORD).unwrap();
+    }
+
+    #[test]
+    fn direct_password_change_accepts_good_and_strong_passwords() {
+        for replacement in ["aaaaaaaaaaaa", "V7!qR2@tL9#z"] {
+            let fixture = CommandFixture::new();
+            fixture.create_unlocked_profile();
+            let before_key = fixture.auth.require_vault_key(|key| *key).unwrap();
+            assert_eq!(
+                change_master_password_value(
+                    PASSWORD,
+                    replacement,
+                    &fixture.auth,
+                    &fixture.operation_gate,
+                )
+                .unwrap(),
+                AuthStatus::Unlocked
+            );
+            assert_eq!(
+                fixture.auth.require_vault_key(|key| *key).unwrap(),
+                before_key
+            );
+            fixture.auth.lock();
+            fixture.auth.unlock(replacement).unwrap();
+        }
+    }
+
+    #[test]
     fn auth_error_codes_and_messages_remain_stable() {
         let cases = [
             (AuthError::PasswordTooShort, "password-too-short"),
+            (AuthError::PasswordTooWeak, "password-too-weak"),
             (AuthError::AlreadyInitialized, "already-initialized"),
             (AuthError::NotInitialized, "not-initialized"),
             (AuthError::InvalidCredentials, "invalid-credentials"),
+            (AuthError::RecoveryNotConfigured, "recovery-not-configured"),
+            (AuthError::InvalidRecoveryKey, "invalid-recovery-key"),
             (
                 AuthError::InvalidResetConfirmation,
                 "invalid-reset-confirmation",
@@ -1665,7 +2087,8 @@ mod command_tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 4);
+        assert_eq!(value.as_object().unwrap().len(), 5);
+        assert_eq!(value["lockOnSleep"], true);
         assert_eq!(value["autoLockSeconds"], 300);
         assert_eq!(value["clipboardClearSeconds"], 30);
         assert_eq!(value["theme"], "system");
@@ -1795,6 +2218,42 @@ mod command_tests {
             .code,
             "invalid-theme"
         );
+    }
+
+    #[test]
+    fn sleep_lock_toggle_persists_both_values_and_rejects_locked_changes() {
+        let fixture = CommandFixture::new();
+        fixture.auth.create_master_password(PASSWORD).unwrap();
+        for enabled in [false, true] {
+            let snapshot = set_lock_on_sleep_value(
+                enabled,
+                &fixture.auth,
+                &fixture.settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap();
+            assert_eq!(snapshot.lock_on_sleep, enabled);
+            let reloaded =
+                SettingsService::load(SettingsStore::new(fixture.temp.path().to_path_buf()))
+                    .unwrap();
+            assert_eq!(reloaded.snapshot(false).lock_on_sleep, enabled);
+        }
+
+        fixture.auto_lock.lock_now().unwrap();
+        assert_eq!(
+            set_lock_on_sleep_value(
+                false,
+                &fixture.auth,
+                &fixture.settings,
+                &fixture.startup,
+                &fixture.operation_gate,
+            )
+            .unwrap_err()
+            .code,
+            "unauthorized"
+        );
+        assert!(fixture.settings.snapshot(false).lock_on_sleep);
     }
 
     #[test]
@@ -2817,5 +3276,301 @@ mod command_tests {
             .unwrap_err();
         assert_eq!(error.code, "unauthorized");
         assert_eq!(fixture.auth.status(), AuthStatus::Locked);
+    }
+
+    #[test]
+    fn concurrent_unlock_and_recovery_calls_share_throttle_without_holding_gate_for_delay() {
+        let fixture = CommandFixture::new();
+        let key = fixture.auth.create_master_password(PASSWORD).unwrap();
+        fixture.auth.lock();
+        let before = std::fs::read(fixture.temp.path().join("profile.json")).unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                unlock_and_arm(
+                    "wrong",
+                    &fixture.auth,
+                    &fixture.auto_lock,
+                    &fixture.operation_gate
+                ),
+                Err(AuthError::InvalidCredentials)
+            );
+        }
+        let error = recover_master_password_value(
+            "invalid key",
+            "a replacement master password",
+            &fixture.auth,
+            &fixture.operation_gate,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "throttled");
+        assert_eq!(error.retry_after_ms, Some(2000));
+
+        let (sent, received) = mpsc::channel();
+        let mut workers = Vec::new();
+        for recovery in [false, true, false, true] {
+            let auth = fixture.auth.clone();
+            let gate = fixture.operation_gate.clone();
+            let auto_lock = fixture.auto_lock.clone();
+            let sent = sent.clone();
+            let key = key.clone();
+            workers.push(thread::spawn(move || {
+                let result = if recovery {
+                    recover_master_password_value(
+                        &key,
+                        "a replacement master password",
+                        &auth,
+                        &gate,
+                    )
+                    .map(|_| ())
+                } else {
+                    unlock_and_arm(PASSWORD, &auth, &auto_lock, &gate)
+                        .map(|_| ())
+                        .map_err(PublicIpcError::from)
+                };
+                sent.send(result).unwrap();
+            }));
+        }
+        for _ in 0..4 {
+            // A cooldown must return, not sleep with the operation gate held.
+            let error = received
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code, "throttled");
+            assert!((1..=2000).contains(&error.retry_after_ms.unwrap()));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(fixture.auth.status(), AuthStatus::Locked);
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert!(
+            recovery_status_value(&fixture.auth, &fixture.operation_gate)
+                .unwrap()
+                .configured
+        );
+        let error = fixture
+            .reset_authenticated(PASSWORD, "RESET KEYNEST")
+            .unwrap_err();
+        assert_eq!(error.code, "unauthorized");
+        let error = reset_recovery(
+            "RESET",
+            &fixture.auth,
+            &fixture.startup,
+            &fixture.clipboard,
+            &fixture.settings,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid-reset-confirmation");
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("profile.json")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn offline_recovery_preserves_real_encrypted_records_across_restart_and_rotation() {
+        use zeroize::Zeroizing;
+
+        let fixture = CommandFixture::new();
+        let clipboard_before = "unrelated clipboard text";
+        *fixture.clipboard_port.value.lock().unwrap() = clipboard_before.to_owned();
+        let setup =
+            create_master_password_for_recovery(PASSWORD, &fixture.auth, &fixture.operation_gate)
+                .unwrap();
+        let original_recovery = Zeroizing::new(setup.recovery_key.clone());
+        let original_key = fixture
+            .auth
+            .require_vault_key(|key| Zeroizing::new(*key))
+            .unwrap();
+        let record_password = "fixture credential password";
+        let record = create_vault_record_value(
+            vault_input(record_password),
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        let vault_path = fixture.temp.path().join("vault.enc");
+        let profile_path = fixture.temp.path().join("profile.json");
+        let original_vault = std::fs::read(&vault_path).unwrap();
+        let original_profile = std::fs::read(&profile_path).unwrap();
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            clipboard_before
+        );
+        fixture.auth.lock();
+
+        // Restart the auth service from persisted wrappers, not the setup session.
+        let auth = AuthService::load(
+            ProfileStore::new(fixture.temp.path().to_path_buf()),
+            KdfParams::testing(),
+            Arc::new(crate::security::OsEntropy),
+        );
+        let wrong = "KN-R1-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF";
+        let error = recover_master_password_value(
+            wrong,
+            "replacement master password",
+            &auth,
+            &fixture.operation_gate,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "invalid-recovery-key");
+        assert_eq!(auth.status(), AuthStatus::Locked);
+        assert_eq!(std::fs::read(&profile_path).unwrap(), original_profile);
+        assert_eq!(std::fs::read(&vault_path).unwrap(), original_vault);
+
+        let recovered = recover_master_password_value(
+            &original_recovery,
+            "replacement master password",
+            &auth,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert_eq!(recovered.status, AuthStatus::Unlocked);
+        let replacement_recovery = Zeroizing::new(recovered.recovery_key.clone());
+        assert!(replacement_recovery.as_str() != original_recovery.as_str());
+        assert!(auth
+            .require_vault_key(|key| key == original_key.as_ref())
+            .unwrap());
+        assert_eq!(std::fs::read(&vault_path).unwrap(), original_vault);
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            clipboard_before
+        );
+        let vault = VaultService::new(
+            fixture.temp.path().to_path_buf(),
+            Arc::new(crate::security::OsEntropy),
+        );
+        let read =
+            get_vault_record_value(&record.id, &auth, &vault, &fixture.operation_gate).unwrap();
+        assert!(read.password == record_password);
+        assert_eq!(std::fs::read(&vault_path).unwrap(), original_vault);
+
+        let current_profile = std::fs::read(&profile_path).unwrap();
+        for secret in [
+            PASSWORD,
+            "replacement master password",
+            original_recovery.as_str(),
+            replacement_recovery.as_str(),
+            record_password,
+        ] {
+            for bytes in [&original_profile, &current_profile, &original_vault] {
+                assert!(!bytes
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes()));
+            }
+        }
+        // Status exposes configuration only, never a way to retrieve a saved key.
+        let status =
+            serde_json::to_value(recovery_status_value(&auth, &fixture.operation_gate).unwrap())
+                .unwrap();
+        assert_eq!(status, serde_json::json!({"configured": true}));
+        auth.lock();
+        drop(auth);
+        let auth = AuthService::load(
+            ProfileStore::new(fixture.temp.path().to_path_buf()),
+            KdfParams::testing(),
+            Arc::new(crate::security::OsEntropy),
+        );
+        assert_eq!(auth.unlock(PASSWORD), Err(AuthError::InvalidCredentials));
+        auth.unlock("replacement master password").unwrap();
+        auth.lock();
+        let error = recover_master_password_value(
+            &original_recovery,
+            "another replacement password",
+            &auth,
+            &fixture.operation_gate,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "invalid-recovery-key");
+        assert_eq!(std::fs::read(&profile_path).unwrap(), current_profile);
+        let next = recover_master_password_value(
+            &replacement_recovery,
+            "another replacement password",
+            &auth,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert!(next.recovery_key != *replacement_recovery);
+        assert!(auth
+            .require_vault_key(|key| key == original_key.as_ref())
+            .unwrap());
+        assert!(
+            get_vault_record_value(&record.id, &auth, &vault, &fixture.operation_gate)
+                .unwrap()
+                .password
+                == record_password
+        );
+        assert_eq!(std::fs::read(&vault_path).unwrap(), original_vault);
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            clipboard_before
+        );
+    }
+
+    #[test]
+    fn master_password_recovery_waits_for_the_shared_security_operation_gate() {
+        let fixture = CommandFixture::new();
+        let recovery_key = fixture.auth.create_master_password(PASSWORD).unwrap();
+        fixture.auth.lock();
+        let guard = fixture.operation_gate.lock();
+        let auth = fixture.auth.clone();
+        let operation_gate = fixture.operation_gate.clone();
+        let recovery_key = recovery_key.to_string();
+        let (started_tx, started_rx) = mpsc::channel();
+        let recovery = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            recover_master_password_value(
+                &recovery_key,
+                "new secure master password",
+                &auth,
+                &operation_gate,
+            )
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!recovery.is_finished());
+
+        drop(guard);
+        let result = recovery.join().unwrap().unwrap();
+        assert_eq!(result.status, AuthStatus::Unlocked);
+        assert!(result.recovery_key.starts_with("KN-R1-"));
+    }
+
+    #[test]
+    fn one_time_recovery_key_displays_pause_and_then_rearm_auto_lock() {
+        let fixture = CommandFixture::new();
+        let setup =
+            create_master_password_for_recovery(PASSWORD, &fixture.auth, &fixture.operation_gate)
+                .unwrap();
+        assert_eq!(setup.status, AuthStatus::Unlocked);
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        assert_eq!(
+            finish_recovery_key_display(
+                &fixture.auth,
+                &fixture.auto_lock,
+                &fixture.operation_gate,
+            )
+            .unwrap(),
+            AuthStatus::Unlocked
+        );
+        assert!(fixture.auto_lock.is_armed_for_test());
+
+        regenerate_recovery_key_value(
+            PASSWORD,
+            &fixture.auth,
+            &fixture.auto_lock,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert!(!fixture.auto_lock.is_armed_for_test());
+        finish_recovery_key_display(&fixture.auth, &fixture.auto_lock, &fixture.operation_gate)
+            .unwrap();
+        assert!(fixture.auto_lock.is_armed_for_test());
     }
 }

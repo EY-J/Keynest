@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { Power } from "lucide-react";
 import { useSettings } from "../SettingsProvider";
+import SettingsRow from "./SettingsRow";
 
 const SAVE_ERROR = "KeyNest could not save this general preference.";
 
@@ -21,22 +23,28 @@ export default function GeneralSettings() {
   }
 
   return (
-    <div className="general-settings">
-      <label className="settings-toggle" htmlFor="launch-at-startup">
-        <input
-          id="launch-at-startup"
-          type="checkbox"
-          checked={settings.launchAtStartup}
-          disabled={isSaving}
-          onChange={() => void updateLaunchAtStartup()}
-        />
-        <span>Launch KeyNest at startup</span>
-      </label>
-      <p className="settings-help">
-        When enabled, KeyNest starts minimized and locked so your encrypted data
-        stays private until you unlock it.
-      </p>
-      {error ? <p role="alert">{error}</p> : null}
+    <div className="settings-row-list settings-section-body">
+      <SettingsRow
+        icon={Power}
+        title="Launch at Startup"
+        description="Open KeyNest minimized and locked when Windows starts."
+      >
+        <div className="settings-control-stack">
+          <label className="settings-switch">
+            <input
+              type="checkbox"
+              checked={settings.launchAtStartup}
+              disabled={isSaving}
+              aria-label="Launch KeyNest at startup"
+              onChange={() => void updateLaunchAtStartup()}
+            />
+            <span aria-hidden="true" />
+          </label>
+          {error ? (
+            <span className="settings-inline-error" role="alert">{error}</span>
+          ) : null}
+        </div>
+      </SettingsRow>
     </div>
   );
 }

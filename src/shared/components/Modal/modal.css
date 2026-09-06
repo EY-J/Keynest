@@ -1,0 +1,55 @@
+:root {
+  --modal-enter-duration: 240ms;
+  --modal-exit-duration: 170ms;
+  --modal-enter-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --modal-exit-ease: cubic-bezier(0.4, 0, 1, 1);
+  --modal-backdrop-enter-duration: 180ms;
+  --modal-backdrop-exit-duration: 140ms;
+}
+.keynest-modal {
+  /* Static top placement; auto margins center the native dialog horizontally. */
+  --modal-top: 78px;
+  position: fixed;
+  inset: var(--modal-top) 0 auto;
+  width: min(var(--modal-width, 520px), calc(100vw - 48px));
+  max-width: none;
+  max-height: calc(100dvh - var(--modal-top) - 24px);
+  margin: 0 auto;
+  padding: 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--kn-border-strong);
+  border-radius: 16px;
+  background: var(--kn-surface);
+  color: var(--kn-text);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  transform-origin: top center;
+}
+.keynest-modal__body { min-width: 0; overflow-wrap: anywhere; }
+.keynest-modal[open] { animation: keynest-modal-enter var(--modal-enter-duration) var(--modal-enter-ease) both; }
+.keynest-modal::backdrop {
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(1.5px);
+  animation: keynest-modal-fade-in var(--modal-backdrop-enter-duration) ease-out both;
+}
+.keynest-modal[data-state="closing"] { animation: keynest-modal-exit var(--modal-exit-duration) var(--modal-exit-ease) both; }
+.keynest-modal[data-state="closing"]::backdrop { animation: keynest-modal-fade-out var(--modal-backdrop-exit-duration) ease-in both; }
+.keynest-modal-active body, .keynest-modal-active #root,
+.keynest-modal-active .settings-page, .keynest-modal-active .settings-content,
+.keynest-modal-active .settings-category-nav, .keynest-modal-active .password-vault-page,
+.keynest-modal-active .home-page { overflow: hidden !important; }
+.keynest-modal :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--kn-accent); outline-offset: 2px; }
+.keynest-modal__close { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--kn-muted); cursor: pointer; }
+@keyframes keynest-modal-enter { from { opacity: 0; transform: translateY(-3px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes keynest-modal-exit { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-2px) scale(0.99); } }
+@keyframes keynest-modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes keynest-modal-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@media (max-width: 560px) { .keynest-modal { width: calc(100vw - 32px); padding: 20px; } }
+/* Preserve the 78px offset at the 1000 x 700 baseline. */
+@media (max-height: 680px) { .keynest-modal { --modal-top: 60px; } }
+@media (max-height: 620px) { .keynest-modal { --modal-top: 44px; } }
+@media (prefers-reduced-motion: reduce) {
+  :root { --modal-enter-duration: 10ms; --modal-exit-duration: 10ms; --modal-backdrop-enter-duration: 10ms; --modal-backdrop-exit-duration: 10ms; }
+  .keynest-modal[open] { animation-name: keynest-modal-fade-in; }
+  .keynest-modal[data-state="closing"] { animation-name: keynest-modal-fade-out; }
+}

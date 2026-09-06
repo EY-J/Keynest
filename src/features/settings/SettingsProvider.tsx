@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS: SettingsSnapshot = {
   clipboardClearSeconds: 30,
   theme: "system",
   launchAtStartup: false,
+  lockOnSleep: true,
 };
 
 type SettingsContextValue = {
@@ -32,6 +33,7 @@ type SettingsContextValue = {
   setClipboardClearSeconds(value: ClipboardClearSeconds): Promise<void>;
   setTheme(value: ThemePreference): Promise<void>;
   setLaunchAtStartup(enabled: boolean): Promise<void>;
+  setLockOnSleep(enabled: boolean): Promise<void>;
   resetToDefaults(): void;
   reload(): Promise<void>;
 };
@@ -202,6 +204,12 @@ export default function SettingsProvider({ children }: SettingsProviderProps) {
     [updateSettings],
   );
 
+  const setLockOnSleep = useCallback(
+    (enabled: boolean) =>
+      updateSettings(() => settingsClient.setLockOnSleep(enabled)),
+    [updateSettings],
+  );
+
   const resetToDefaults = useCallback(() => {
     beginMutation();
     beginReload();
@@ -216,6 +224,7 @@ export default function SettingsProvider({ children }: SettingsProviderProps) {
     setClipboardClearSeconds,
     setTheme,
     setLaunchAtStartup,
+    setLockOnSleep,
     resetToDefaults,
     reload,
   };

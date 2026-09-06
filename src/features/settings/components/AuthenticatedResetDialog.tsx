@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import Modal, { useModalClose } from "../../../shared/components/Modal/Modal";
 import PasswordField from "../../auth/components/PasswordField";
 
 type AuthenticatedResetDialogProps = {
@@ -17,7 +18,8 @@ export default function AuthenticatedResetDialog({
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLElement>(null);
+
+  const modal = useModalClose(onClose);
 
   useEffect(() => {
     if (!isOpen) {
@@ -26,38 +28,7 @@ export default function AuthenticatedResetDialog({
       setError("");
       return;
     }
-    passwordRef.current?.focus();
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !isSubmitting) {
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") {
-        return;
-      }
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled)',
-        ) ?? [],
-      );
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) {
-        return;
-      }
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, isSubmitting, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) {
     return null;
@@ -75,7 +46,7 @@ export default function AuthenticatedResetDialog({
       await onReset(currentPassword, "RESET KEYNEST");
       setCurrentPassword("");
       setConfirmation("");
-      onClose();
+      modal.close();
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -90,14 +61,9 @@ export default function AuthenticatedResetDialog({
   const canReset = currentPassword.length > 0 && confirmation === "RESET KEYNEST";
 
   return (
-    <div className="reset-dialog-backdrop">
-      <section
-        ref={dialogRef}
-        className="reset-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="authenticated-reset-dialog-title"
-      >
+    <Modal className="reset-dialog" width={440}
+      titleId="authenticated-reset-dialog-title" closing={modal.closing} onClose={() => modal.close()}
+      onExitComplete={modal.finishClose} pending={isSubmitting} initialFocusRef={passwordRef}>
         <p className="auth-eyebrow danger-text">DESTRUCTIVE RESET</p>
         <h2 id="authenticated-reset-dialog-title">Reset KeyNest?</h2>
         <p>
@@ -110,7 +76,6 @@ export default function AuthenticatedResetDialog({
             value={currentPassword}
             onChange={setCurrentPassword}
             autoComplete="current-password"
-            autoFocus
             disabled={isSubmitting}
             inputRef={passwordRef}
           />
@@ -126,7 +91,7 @@ export default function AuthenticatedResetDialog({
           />
           {error ? <p className="auth-error" role="alert">{error}</p> : null}
           <div className="reset-dialog-actions">
-            <button type="button" disabled={isSubmitting} onClick={onClose}>
+            <button className="keynest-button--secondary" type="button" disabled={isSubmitting} onClick={() => modal.close()}>
               Cancel
             </button>
             <button className="danger-button" disabled={!canReset || isSubmitting}>
@@ -134,7 +99,6 @@ export default function AuthenticatedResetDialog({
             </button>
           </div>
         </form>
-      </section>
-    </div>
+    </Modal>
   );
 }

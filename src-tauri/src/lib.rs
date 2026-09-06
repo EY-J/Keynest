@@ -1,3 +1,4 @@
+mod diagnostics;
 mod ipc;
 mod platform;
 mod security;
@@ -20,16 +21,35 @@ use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 use vault::VaultService;
 
-fn resume_lock(auto_lock: &AutoLockService) {
-    let _ = auto_lock.lock_now();
+fn resume_lock(
+    auto_lock: &AutoLockService,
+    settings: &SettingsService,
+    operation_gate: &SecurityOperationGate,
+) {
+    let guard = operation_gate.lock();
+    if settings.snapshot(false).lock_on_sleep {
+        let _ = auto_lock.lock_now_with_operation_guard(&guard);
+    }
 }
 
 fn shutdown_auto_lock(auto_lock: &AutoLockService) {
     auto_lock.shutdown();
 }
 
+fn configure_capture_protection(config: &mut tauri::Config) {
+    // Screenshot protection is intentionally disabled in debug builds to allow UI development and visual regression testing. Release builds must keep capture protection enabled.
+    if cfg!(debug_assertions) {
+        for window in &mut config.app.windows {
+            window.content_protected = false;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    diagnostics::install_panic_hook();
+    let mut context = tauri::generate_context!();
+    configure_capture_protection(context.config_mut());
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
@@ -54,7 +74,7 @@ pub fn run() {
             app.manage(settings);
 
             let kdf_params = KdfParams::production();
-            let store = ProfileStore::new(app_data_dir.clone(), kdf_params);
+            let store = ProfileStore::new(app_data_dir.clone());
             let auth = AuthService::load(store, kdf_params, Arc::new(OsEntropy));
             app.manage(auth.clone());
             app.manage(VaultService::new(app_data_dir, Arc::new(OsEntropy)));
@@ -76,16 +96,36 @@ pub fn run() {
                 Arc::new(coordinator),
                 Duration::from_secs(snapshot.auto_lock_seconds),
             ));
+            #[cfg(windows)]
+            {
+                let auto_lock = app.state::<AutoLockService>().inner().clone();
+                let settings = app.state::<SettingsService>().inner().clone();
+                let gate = app.state::<SecurityOperationGate>().inner().clone();
+                app.manage(platform::session::SessionMonitor::start(move |trigger| {
+                    let guard = gate.lock();
+                    if trigger == platform::session::EnvironmentLock::Session
+                        || settings.snapshot(false).lock_on_sleep
+                    {
+                        let _ = auto_lock.lock_now_with_operation_guard(&guard);
+                    }
+                })?);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             ipc::get_auth_status,
             ipc::create_master_password,
+            ipc::complete_recovery_key_display,
+            ipc::get_recovery_status,
+            ipc::recover_master_password,
+            ipc::regenerate_recovery_key,
+            ipc::copy_recovery_key,
             ipc::unlock,
             ipc::lock,
             ipc::get_settings,
             ipc::set_auto_lock_seconds,
             ipc::set_clipboard_clear_seconds,
+            ipc::set_lock_on_sleep,
             ipc::set_theme,
             ipc::set_launch_at_startup,
             ipc::record_activity,
@@ -96,15 +136,20 @@ pub fn run() {
             ipc::list_vault_records,
             ipc::create_vault_record,
             ipc::get_vault_record,
+            ipc::get_vault_record_summary,
             ipc::update_vault_record,
             ipc::delete_vault_record,
             ipc::copy_vault_password
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| match event {
             tauri::RunEvent::Resumed => {
-                resume_lock(app.state::<AutoLockService>().inner());
+                resume_lock(
+                    app.state::<AutoLockService>().inner(),
+                    app.state::<SettingsService>().inner(),
+                    app.state::<SecurityOperationGate>().inner(),
+                );
             }
             tauri::RunEvent::ExitRequested { api, code, .. } => {
                 shutdown_auto_lock(app.state::<AutoLockService>().inner());
@@ -133,7 +178,8 @@ mod lifecycle_tests {
     };
 
     use super::{resume_lock, AutoLockService};
-    use crate::security::{AuthStatus, LockActions, LockError};
+    use crate::security::{AuthStatus, LockActions, LockError, SecurityOperationGate};
+    use crate::settings::{SettingsService, SettingsStore};
 
     struct BlockingResumeActions {
         started: (Mutex<bool>, Condvar),
@@ -188,9 +234,13 @@ mod lifecycle_tests {
         let actions = Arc::new(BlockingResumeActions::new());
         let auto_lock = AutoLockService::new_for_test(actions.clone(), Duration::from_secs(300));
         let resumed_service = auto_lock.clone();
+        let temp = tempfile::tempdir().unwrap();
+        let settings =
+            SettingsService::load(SettingsStore::new(temp.path().to_path_buf())).unwrap();
+        let operation_gate = SecurityOperationGate::new();
         let (returned_tx, returned_rx) = std::sync::mpsc::channel();
         let resumed = thread::spawn(move || {
-            resume_lock(&resumed_service);
+            resume_lock(&resumed_service, &settings, &operation_gate);
             returned_tx.send(()).unwrap();
         });
         actions.wait_until_started();
@@ -198,5 +248,20 @@ mod lifecycle_tests {
         actions.release();
         returned_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         resumed.join().unwrap();
+    }
+
+    #[test]
+    fn resume_handler_skips_lock_when_sleep_lock_is_disabled() {
+        let actions = Arc::new(BlockingResumeActions::new());
+        actions.release();
+        let auto_lock = AutoLockService::new_for_test(actions.clone(), Duration::from_secs(300));
+        let temp = tempfile::tempdir().unwrap();
+        let settings =
+            SettingsService::load(SettingsStore::new(temp.path().to_path_buf())).unwrap();
+        settings.set_lock_on_sleep(false).unwrap();
+
+        resume_lock(&auto_lock, &settings, &SecurityOperationGate::new());
+
+        assert!(!*actions.started.0.lock().unwrap());
     }
 }

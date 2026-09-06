@@ -4,6 +4,15 @@ export type AuthStatus =
   | "unlocked"
   | "data-error";
 
+export type RecoveryKeyResult = {
+  status: AuthStatus;
+  recoveryKey: string;
+};
+
+export type RecoveryStatus = {
+  configured: boolean;
+};
+
 export class AuthClientError extends Error {
   readonly code: string;
   readonly retryAfterMs?: number;

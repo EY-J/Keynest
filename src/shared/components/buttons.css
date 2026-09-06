@@ -1,0 +1,140 @@
+/* Interaction only: existing component classes own size, spacing and layout. */
+:root {
+  --button-transition: 140ms ease;
+  --button-press-transition: 90ms ease;
+  --button-primary-bg: color-mix(in srgb, var(--kn-accent) 80%, transparent);
+  --button-primary-bg-hover: var(--kn-accent);
+  --button-danger-bg: color-mix(in srgb, var(--kn-danger) 80%, transparent);
+  --button-danger-bg-hover: var(--kn-danger);
+  --button-neutral-bg: color-mix(in srgb, var(--kn-text) 2%, transparent);
+  --button-neutral-bg-hover: color-mix(in srgb, var(--kn-text) 9%, transparent);
+  --button-neutral-border: color-mix(in srgb, var(--kn-text) 10%, transparent);
+  --button-neutral-border-hover: color-mix(in srgb, var(--kn-text) 22%, transparent);
+}
+
+/* Existing semantic classes are aliases; unclassified actions are neutral. */
+:where(button) {
+  --button-bg: var(--button-neutral-bg);
+  --button-bg-hover: var(--button-neutral-bg-hover);
+  --button-border: var(--button-neutral-border);
+  --button-border-hover: var(--button-neutral-border-hover);
+  --button-fg: var(--kn-text);
+  --button-fg-hover: var(--kn-text);
+  --button-focus: var(--kn-text);
+}
+button:is(.primary-button, .keynest-button--primary) {
+  --button-bg: var(--button-primary-bg);
+  --button-bg-hover: var(--button-primary-bg-hover);
+  --button-border: color-mix(in srgb, var(--kn-accent) 60%, transparent);
+  --button-border-hover: var(--kn-accent);
+  --button-fg: var(--kn-accent-contrast);
+  --button-fg-hover: var(--kn-accent-contrast);
+  --button-focus: var(--kn-accent);
+}
+button:is(.danger-button, .vault-danger-button, .keynest-button--danger) {
+  --button-bg: var(--button-danger-bg);
+  --button-bg-hover: var(--button-danger-bg-hover);
+  --button-border: color-mix(in srgb, var(--kn-danger) 60%, transparent);
+  --button-border-hover: var(--kn-danger);
+  --button-fg: var(--kn-danger-contrast);
+  --button-fg-hover: var(--kn-danger-contrast);
+  --button-focus: var(--kn-danger);
+}
+button:is(.keynest-button--ghost, .keynest-button--icon,
+  .keynest-modal__close, .vault-pw-icon-btn, .titlebar-menu-button, .profile-button),
+.titlebar-window-controls button {
+  --button-bg: transparent;
+  --button-border: transparent;
+  --button-fg: var(--kn-muted);
+}
+button:is(.feature-button, .keynest-button--icon-primary) {
+  --button-bg: color-mix(in srgb, var(--kn-accent) 5%, transparent);
+  --button-bg-hover: color-mix(in srgb, var(--kn-accent) 15%, transparent);
+  --button-border: color-mix(in srgb, var(--kn-accent) 16%, transparent);
+  --button-border-hover: var(--kn-accent);
+  --button-fg: var(--kn-accent);
+  --button-fg-hover: var(--kn-accent);
+  --button-focus: var(--kn-accent);
+}
+button.keynest-button--icon-danger {
+  --button-bg: color-mix(in srgb, var(--kn-danger) 5%, transparent);
+  --button-bg-hover: color-mix(in srgb, var(--kn-danger) 15%, transparent);
+  --button-border: color-mix(in srgb, var(--kn-danger) 16%, transparent);
+  --button-border-hover: var(--kn-danger);
+  --button-fg: var(--kn-danger);
+  --button-fg-hover: var(--kn-danger);
+  --button-focus: var(--kn-danger);
+}
+button.window-close-button {
+  --button-bg-hover: var(--kn-danger);
+  --button-fg-hover: var(--kn-danger-contrast);
+  --button-focus: var(--kn-danger);
+}
+
+/* Explicit semantic opt-in; specialized controls keep their own presentation.
+   Existing named button classes remain supported aliases. */
+button:is(.keynest-button, .primary-button, .danger-button, .vault-danger-button,
+  .secondary-button, .feature-button, .keynest-modal__close, .vault-pw-icon-btn,
+  .titlebar-menu-button, .profile-button, .keynest-button--primary,
+  .keynest-button--danger, .keynest-button--secondary, .keynest-button--ghost,
+  .keynest-button--icon, .keynest-button--icon-primary, .keynest-button--icon-danger
+):not(.auth-unlock-button):not(:where(.offline-recovery-close)) {
+  background-color: var(--button-bg);
+  border-color: var(--button-border);
+  color: var(--button-fg);
+  box-shadow: none;
+  filter: none;
+  transition: background-color var(--button-transition), border-color var(--button-transition),
+    color var(--button-transition), transform var(--button-press-transition);
+
+  &:is(:hover, :active):not(:disabled) {
+    background-color: var(--button-bg-hover);
+    border-color: var(--button-border-hover);
+    color: var(--button-fg-hover);
+    transform: none;
+    box-shadow: none;
+  }
+  &:active:not(:disabled) { transform: scale(var(--button-press-scale, 0.98)); }
+  &:focus-visible { outline: 2px solid var(--button-focus); outline-offset: 2px; }
+  &:disabled {
+    background-color: var(--button-neutral-bg);
+    border-color: var(--button-neutral-border);
+    color: var(--kn-muted);
+    opacity: 0.5;
+    transform: none;
+    box-shadow: none;
+    transition: none;
+    cursor: not-allowed;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+    &:active:not(:disabled) { transform: none; }
+  }
+}
+
+/* Text actions explicitly opt out of filled surfaces and press compression. */
+button.keynest-button--text {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 0;
+  padding: 0;
+  justify-self: center;
+  align-self: center;
+  margin-inline: auto;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--kn-muted);
+  transform: none;
+  transition: color var(--button-transition);
+
+  &:is(:hover, :active):not(:disabled) {
+    background: transparent;
+    box-shadow: none;
+    color: var(--kn-text);
+    transform: none;
+  }
+  &:focus-visible { outline: 2px solid var(--button-focus); outline-offset: 2px; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; transition: none; }
+  @media (prefers-reduced-motion: reduce) { transition: none; }
+}

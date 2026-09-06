@@ -7,6 +7,7 @@ export type SettingsSnapshot = {
   clipboardClearSeconds: ClipboardClearSeconds;
   theme: ThemePreference;
   launchAtStartup: boolean;
+  lockOnSleep: boolean;
   warning?: string;
 };
 

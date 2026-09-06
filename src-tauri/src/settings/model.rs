@@ -27,6 +27,7 @@ impl ThemePreference {
 pub(crate) struct SettingsValues {
     pub auto_lock_seconds: u64,
     pub clipboard_clear_seconds: u64,
+    pub lock_on_sleep: bool,
     pub theme: ThemePreference,
 }
 
@@ -35,6 +36,7 @@ impl Default for SettingsValues {
         Self {
             auto_lock_seconds: 300,
             clipboard_clear_seconds: 30,
+            lock_on_sleep: true,
             theme: ThemePreference::System,
         }
     }
@@ -45,6 +47,7 @@ impl Default for SettingsValues {
 pub(crate) struct SettingsSnapshot {
     pub auto_lock_seconds: u64,
     pub clipboard_clear_seconds: u64,
+    pub lock_on_sleep: bool,
     pub theme: ThemePreference,
     pub launch_at_startup: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

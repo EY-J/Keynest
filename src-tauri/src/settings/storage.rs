@@ -19,7 +19,13 @@ struct StoredSettings {
     format_version: u32,
     auto_lock_seconds: u64,
     clipboard_clear_seconds: u64,
+    #[serde(default = "default_lock_on_sleep")]
+    lock_on_sleep: bool,
     theme: ThemePreference,
+}
+
+fn default_lock_on_sleep() -> bool {
+    true
 }
 
 impl StoredSettings {
@@ -28,6 +34,7 @@ impl StoredSettings {
             format_version: FORMAT_VERSION,
             auto_lock_seconds: values.auto_lock_seconds,
             clipboard_clear_seconds: values.clipboard_clear_seconds,
+            lock_on_sleep: values.lock_on_sleep,
             theme: values.theme,
         }
     }
@@ -36,6 +43,7 @@ impl StoredSettings {
         let values = SettingsValues {
             auto_lock_seconds: self.auto_lock_seconds,
             clipboard_clear_seconds: self.clipboard_clear_seconds,
+            lock_on_sleep: self.lock_on_sleep,
             theme: self.theme,
         };
 

@@ -1,0 +1,49 @@
+.auth-shell.auth-shell-with-background {
+  position: relative;
+  isolation: isolate;
+  background: var(--kn-bg);
+}
+
+.auth-shell-with-background .auth-content {
+  position: relative;
+}
+
+.auth-shell-with-background .auth-form {
+  position: relative;
+  z-index: 1;
+}
+
+/* Keep disabled controls opaque; element opacity reveals the pixels behind them. */
+.auth-shell-with-background .auth-submit:disabled {
+  opacity: 1;
+  background: color-mix(in srgb, var(--kn-accent) 58%, var(--kn-bg));
+  border-color: color-mix(in srgb, var(--kn-accent) 58%, var(--kn-bg));
+  box-shadow: none;
+}
+
+/* Out of document flow and behind all form content, but above the shell fill. */
+.lock-screen-background {
+  position: fixed;
+  inset: 40px 0 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.22;
+  mask-image: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.12) 15%, #000 72%);
+}
+
+.lock-screen-background > .pixel-blast-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+:root[data-theme="light"] .lock-screen-background {
+  opacity: 0.12;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-screen-background {
+    display: none;
+  }
+}

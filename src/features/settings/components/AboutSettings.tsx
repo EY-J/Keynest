@@ -1,7 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { FolderOpen, Info } from "lucide-react";
 import { useEffect, useState } from "react";
-import BrandMark from "../../../shared/components/BrandMark";
 import { settingsClient } from "../settingsClient";
+import SettingsRow from "./SettingsRow";
 
 export default function AboutSettings() {
   const [version, setVersion] = useState<string | null>(null);
@@ -26,20 +27,30 @@ export default function AboutSettings() {
   }, []);
 
   return (
-    <div className="about-settings">
-      <BrandMark className="about-mark" />
-      <p>{version === null ? "Version unavailable" : `Version ${version}`}</p>
-      <p>
-        Your encrypted KeyNest data stays on this device. KeyNest has no account
-        service and cannot recover a forgotten master password.
-      </p>
-      <button
-        className="secondary-button"
-        type="button"
-        onClick={() => void settingsClient.openDataFolder()}
+    <div className="settings-row-list settings-section-body">
+      <SettingsRow
+        icon={Info}
+        title="KeyNest"
+        description="Local-first secure personal vault."
       >
-        Open KeyNest data folder
-      </button>
+        <span className="settings-version">
+          {version === null ? "Version unavailable" : `Version ${version}`}
+        </span>
+      </SettingsRow>
+
+      <SettingsRow
+        icon={FolderOpen}
+        title="Data Location"
+        description="Your encrypted local KeyNest data."
+      >
+        <button
+          className="secondary-button compact-button"
+          type="button"
+          onClick={() => void settingsClient.openDataFolder()}
+        >
+          Open Folder
+        </button>
+      </SettingsRow>
     </div>
   );
 }

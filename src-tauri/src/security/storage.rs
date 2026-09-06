@@ -10,11 +10,12 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-use super::crypto::{KdfParams, WrappedVaultKey};
+use super::crypto::WrappedVaultKey;
 
 const PROFILE_FILENAME: &str = "profile.json";
 const VAULT_FILENAME: &str = "vault.enc";
-const FORMAT_VERSION: u32 = 1;
+const LEGACY_FORMAT_VERSION: u32 = 1;
+const RECOVERY_FORMAT_VERSION: u32 = 2;
 const KDF_ALGORITHM: &str = "argon2id";
 const KEY_WRAP_ALGORITHM: &str = "xchacha20poly1305";
 
@@ -25,26 +26,64 @@ pub(crate) struct StoredProfile {
     pub kdf_algorithm: String,
     pub key_wrap_algorithm: String,
     pub wrapped_key: WrappedVaultKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_wrapped_key: Option<WrappedVaultKey>,
 }
 
 impl StoredProfile {
+    #[cfg(test)]
     pub(crate) fn new(wrapped_key: WrappedVaultKey) -> Self {
         Self {
-            format_version: FORMAT_VERSION,
+            format_version: LEGACY_FORMAT_VERSION,
             kdf_algorithm: KDF_ALGORITHM.to_owned(),
             key_wrap_algorithm: KEY_WRAP_ALGORITHM.to_owned(),
             wrapped_key,
+            recovery_wrapped_key: None,
         }
     }
 
-    fn validate(&self, accepted_kdf: KdfParams) -> Result<(), StorageError> {
-        if self.format_version != FORMAT_VERSION
+    pub(crate) fn with_recovery(
+        wrapped_key: WrappedVaultKey,
+        recovery_wrapped_key: WrappedVaultKey,
+    ) -> Self {
+        Self {
+            format_version: RECOVERY_FORMAT_VERSION,
+            kdf_algorithm: KDF_ALGORITHM.to_owned(),
+            key_wrap_algorithm: KEY_WRAP_ALGORITHM.to_owned(),
+            wrapped_key,
+            recovery_wrapped_key: Some(recovery_wrapped_key),
+        }
+    }
+
+    pub(crate) fn replacing_master_wrapper(&self, wrapped_key: WrappedVaultKey) -> Self {
+        Self {
+            wrapped_key,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn replacing_recovery_wrapper(&self, recovery_wrapped_key: WrappedVaultKey) -> Self {
+        Self {
+            format_version: RECOVERY_FORMAT_VERSION,
+            recovery_wrapped_key: Some(recovery_wrapped_key),
+            ..self.clone()
+        }
+    }
+
+    fn validate(&self) -> Result<(), StorageError> {
+        let supported_shape = match self.format_version {
+            LEGACY_FORMAT_VERSION => self.recovery_wrapped_key.is_none(),
+            RECOVERY_FORMAT_VERSION => true,
+            _ => false,
+        };
+        if !supported_shape
             || self.kdf_algorithm != KDF_ALGORITHM
             || self.key_wrap_algorithm != KEY_WRAP_ALGORITHM
-            || self.wrapped_key.params != accepted_kdf
-            || decoded_length(&self.wrapped_key.salt) != Some(16)
-            || decoded_length(&self.wrapped_key.nonce) != Some(24)
-            || decoded_length(&self.wrapped_key.ciphertext) != Some(48)
+            || !valid_wrapped_key(&self.wrapped_key)
+            || self
+                .recovery_wrapped_key
+                .as_ref()
+                .is_some_and(|wrapped| !valid_wrapped_key(wrapped))
         {
             return Err(StorageError::DamagedProfile);
         }
@@ -56,16 +95,14 @@ impl StoredProfile {
 #[derive(Clone, Debug)]
 pub(crate) struct ProfileStore {
     app_data_dir: PathBuf,
-    accepted_kdf: KdfParams,
     #[cfg(test)]
     fail_next_replace: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ProfileStore {
-    pub(crate) fn new(app_data_dir: PathBuf, accepted_kdf: KdfParams) -> Self {
+    pub(crate) fn new(app_data_dir: PathBuf) -> Self {
         Self {
             app_data_dir,
-            accepted_kdf,
             #[cfg(test)]
             fail_next_replace: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -80,12 +117,12 @@ impl ProfileStore {
         let bytes = fs::read(path).map_err(StorageError::Io)?;
         let profile: StoredProfile =
             serde_json::from_slice(&bytes).map_err(|_| StorageError::DamagedProfile)?;
-        profile.validate(self.accepted_kdf)?;
-        Ok(ProfileLoad::Valid(profile))
+        profile.validate()?;
+        Ok(ProfileLoad::Valid(Box::new(profile)))
     }
 
     pub(crate) fn create(&self, profile: &StoredProfile) -> Result<(), StorageError> {
-        profile.validate(self.accepted_kdf)?;
+        profile.validate()?;
         fs::create_dir_all(&self.app_data_dir).map_err(StorageError::Io)?;
 
         let bytes = serde_json::to_vec_pretty(profile).map_err(StorageError::Serialization)?;
@@ -106,7 +143,7 @@ impl ProfileStore {
     }
 
     pub(crate) fn replace(&self, profile: &StoredProfile) -> Result<(), StorageError> {
-        profile.validate(self.accepted_kdf)?;
+        profile.validate()?;
         fs::create_dir_all(&self.app_data_dir).map_err(StorageError::Io)?;
 
         let bytes = serde_json::to_vec_pretty(profile).map_err(StorageError::Serialization)?;
@@ -154,7 +191,7 @@ impl ProfileStore {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProfileLoad {
     Missing,
-    Valid(StoredProfile),
+    Valid(Box<StoredProfile>),
 }
 
 #[derive(Debug, Error)]
@@ -171,6 +208,13 @@ pub(crate) enum StorageError {
 
 fn decoded_length(value: &str) -> Option<usize> {
     STANDARD.decode(value).ok().map(|bytes| bytes.len())
+}
+
+fn valid_wrapped_key(wrapped: &WrappedVaultKey) -> bool {
+    wrapped.params.validate().is_ok()
+        && decoded_length(&wrapped.salt) == Some(16)
+        && decoded_length(&wrapped.nonce) == Some(24)
+        && decoded_length(&wrapped.ciphertext) == Some(48)
 }
 
 fn remove_if_present(path: &Path) -> Result<(), StorageError> {
@@ -208,9 +252,65 @@ mod tests {
     }
 
     #[test]
+    fn malformed_or_excessive_kdf_metadata_in_either_wrapper_fails_closed() {
+        use serde_json::json;
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let (legacy, _) = profile_fixture("fixture password");
+        let profile = StoredProfile::with_recovery(legacy.wrapped_key.clone(), legacy.wrapped_key);
+        let original = serde_json::to_value(profile).unwrap();
+        for wrapper in ["wrapped_key", "recovery_wrapped_key"] {
+            for invalid in [
+                json!(null),
+                json!({"memory_kib": 65_536, "iterations": 3}),
+                json!({"memory_kib": "65536", "iterations": 3, "parallelism": 4}),
+                json!({"memory_kib": -1, "iterations": 3, "parallelism": 4}),
+                json!({"memory_kib": 65536.5, "iterations": 3, "parallelism": 4}),
+                json!({"memory_kib": 65_536, "iterations": 3, "parallelism": 4, "unknown": 1}),
+                json!({"memory_kib": 0, "iterations": 3, "parallelism": 4}),
+                json!({"memory_kib": 65_536, "iterations": 0, "parallelism": 4}),
+                json!({"memory_kib": 65_536, "iterations": 3, "parallelism": 0}),
+                json!({"memory_kib": u32::MAX, "iterations": 3, "parallelism": 4}),
+                json!({"memory_kib": 65_536, "iterations": u32::MAX, "parallelism": 4}),
+                json!({"memory_kib": 65_536, "iterations": 3, "parallelism": u32::MAX}),
+                json!({"memory_kib": 131_072, "iterations": 4, "parallelism": 4}),
+                json!({"memory_kib": 4294967296_u64, "iterations": 3, "parallelism": 4}),
+            ] {
+                let mut damaged = original.clone();
+                damaged[wrapper]["params"] = invalid;
+                let bytes = serde_json::to_vec(&damaged).unwrap();
+                std::fs::write(store.profile_path(), &bytes).unwrap();
+                assert!(matches!(store.load(), Err(StorageError::DamagedProfile)));
+                assert_eq!(std::fs::read(store.profile_path()).unwrap(), bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_kdf_cannot_be_created_or_replace_an_existing_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let (profile, _) = profile_fixture("fixture password");
+        let mut invalid = profile.clone();
+        invalid.wrapped_key.params.memory_kib = u32::MAX;
+        assert!(matches!(
+            store.create(&invalid),
+            Err(StorageError::DamagedProfile)
+        ));
+        assert!(!store.profile_path().exists());
+        store.create(&profile).unwrap();
+        let original = std::fs::read(store.profile_path()).unwrap();
+        assert!(matches!(
+            store.replace(&invalid),
+            Err(StorageError::DamagedProfile)
+        ));
+        assert_eq!(std::fs::read(store.profile_path()).unwrap(), original);
+    }
+
+    #[test]
     fn missing_profile_is_distinct_from_damaged_profile() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        let store = ProfileStore::new(temp.path().to_path_buf());
         assert_eq!(store.load().unwrap(), ProfileLoad::Missing);
 
         std::fs::write(temp.path().join("profile.json"), b"not-json").unwrap();
@@ -221,7 +321,7 @@ mod tests {
     #[test]
     fn profile_creation_never_writes_plaintext_secrets() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        let store = ProfileStore::new(temp.path().to_path_buf());
         let password = "a secure master password";
         let (profile, plaintext_vault_key) = profile_fixture(password);
 
@@ -234,15 +334,18 @@ mod tests {
         assert!(!bytes
             .windows(plaintext_vault_key.len())
             .any(|window| window == plaintext_vault_key));
-        assert_eq!(store.load().unwrap(), ProfileLoad::Valid(profile));
+        assert_eq!(store.load().unwrap(), ProfileLoad::Valid(Box::new(profile)));
     }
 
     #[test]
     fn weaker_kdf_metadata_is_rejected_as_damaged() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::production());
+        let store = ProfileStore::new(temp.path().to_path_buf());
         let (mut profile, _) = profile_fixture("a secure master password");
-        profile.wrapped_key.params = KdfParams::testing();
+        profile.wrapped_key.params = KdfParams {
+            memory_kib: 65_535,
+            ..KdfParams::production()
+        };
         std::fs::write(
             temp.path().join("profile.json"),
             serde_json::to_vec(&profile).unwrap(),
@@ -255,7 +358,7 @@ mod tests {
     #[test]
     fn reset_deletes_only_keynest_owned_security_files() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        let store = ProfileStore::new(temp.path().to_path_buf());
         std::fs::write(temp.path().join("profile.json"), b"profile").unwrap();
         std::fs::write(temp.path().join("vault.enc"), b"vault").unwrap();
         std::fs::write(temp.path().join("vault.enc-journal"), b"journal").unwrap();
@@ -276,7 +379,7 @@ mod tests {
     #[test]
     fn failed_vault_deletion_preserves_profile_for_a_retry() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        let store = ProfileStore::new(temp.path().to_path_buf());
         std::fs::write(temp.path().join("profile.json"), b"profile").unwrap();
         std::fs::create_dir(temp.path().join("vault.enc")).unwrap();
 
@@ -287,7 +390,7 @@ mod tests {
     #[test]
     fn password_change_atomic_replace_failure_preserves_original_profile_bytes() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::new(temp.path().to_path_buf(), KdfParams::testing());
+        let store = ProfileStore::new(temp.path().to_path_buf());
         let (original, _) = profile_fixture("old secure master password");
         let (replacement, _) = profile_fixture("new secure master password");
         store.create(&original).unwrap();
@@ -299,6 +402,61 @@ mod tests {
             Err(StorageError::Io(_))
         ));
         assert_eq!(std::fs::read(store.profile_path()).unwrap(), original_bytes);
-        assert_eq!(store.load().unwrap(), ProfileLoad::Valid(original));
+        assert_eq!(
+            store.load().unwrap(),
+            ProfileLoad::Valid(Box::new(original))
+        );
+    }
+
+    #[test]
+    fn legacy_v1_profile_without_recovery_metadata_still_loads() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let (profile, _) = profile_fixture("a secure master password");
+        let mut json = serde_json::to_value(&profile).unwrap();
+        assert!(json.get("recovery_wrapped_key").is_none());
+        json.as_object_mut().unwrap().remove("recovery_wrapped_key");
+        std::fs::write(
+            store.profile_path(),
+            serde_json::to_vec_pretty(&json).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(store.load().unwrap(), ProfileLoad::Valid(Box::new(profile)));
+    }
+
+    #[test]
+    fn recovery_metadata_must_match_the_version_and_validate_completely() {
+        use crate::security::crypto::{generate_recovery_key, wrap_recovery_vault_key};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let (legacy, vault_key) = profile_fixture("a secure master password");
+        let recovery_key = generate_recovery_key(&FixedEntropy).unwrap();
+        let recovery_wrapped = wrap_recovery_vault_key(
+            &recovery_key,
+            vault_key.as_slice().try_into().unwrap(),
+            KdfParams::testing(),
+            &FixedEntropy,
+        )
+        .unwrap();
+
+        let mut invalid_v1 = legacy.clone();
+        invalid_v1.recovery_wrapped_key = Some(recovery_wrapped.clone());
+        std::fs::write(
+            store.profile_path(),
+            serde_json::to_vec(&invalid_v1).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(store.load(), Err(StorageError::DamagedProfile)));
+
+        let mut damaged_v2 = StoredProfile::with_recovery(legacy.wrapped_key, recovery_wrapped);
+        damaged_v2.recovery_wrapped_key.as_mut().unwrap().nonce = "not-base64".to_owned();
+        std::fs::write(
+            store.profile_path(),
+            serde_json::to_vec(&damaged_v2).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(store.load(), Err(StorageError::DamagedProfile)));
     }
 }

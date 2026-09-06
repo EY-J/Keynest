@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Info, Palette, Shield, Settings } from "lucide-react";
 import AboutSettings from "../features/settings/components/AboutSettings";
 import AppearanceSettings from "../features/settings/components/AppearanceSettings";
 import GeneralSettings from "../features/settings/components/GeneralSettings";
@@ -13,27 +14,31 @@ export type SettingsCategory =
 const CATEGORIES: Array<{
   id: SettingsCategory;
   label: string;
-  description: string;
+  description?: string;
+  icon: typeof Shield;
 }> = [
   {
     id: "security",
     label: "Security",
-    description: "Review the security preferences that protect your KeyNest.",
+    icon: Shield,
   },
   {
     id: "general",
     label: "General",
-    description: "Choose how KeyNest behaves on this device.",
+    description: "Configure basic KeyNest behavior.",
+    icon: Settings,
   },
   {
     id: "appearance",
     label: "Appearance",
-    description: "Personalize how KeyNest looks while you use it.",
+    description: "Choose how KeyNest looks.",
+    icon: Palette,
   },
   {
     id: "about",
     label: "About",
-    description: "KeyNest is a private, local-first space for your important information.",
+    description: "KeyNest application information.",
+    icon: Info,
   },
 ];
 
@@ -69,8 +74,9 @@ export default function SettingsPage({
   return (
     <main className="settings-page">
       <nav className="settings-category-nav" aria-label="Settings categories">
+        <h2 className="settings-nav-title">Settings</h2>
         <div className="settings-tabs" role="tablist">
-          {CATEGORIES.map(({ id, label }) => (
+          {CATEGORIES.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               ref={(element) => {
@@ -95,27 +101,25 @@ export default function SettingsPage({
                 }
               }}
             >
-              {label}
+              <Icon size={20} strokeWidth={1.8} aria-hidden="true" />
+              <span>{label}</span>
             </button>
           ))}
         </div>
       </nav>
 
       <section className="settings-content">
-        <p className="eyebrow">KEYNEST PREFERENCES</p>
-        <h1>Settings</h1>
-        <p className="settings-introduction">
-          Set up the parts of KeyNest that make your private space feel right.
-        </p>
-
         <section
           id={`${category.id}-panel`}
           className="settings-panel"
           role="tabpanel"
           aria-labelledby={`${category.id}-tab`}
         >
-          <h2>{category.label}</h2>
-          <p>{category.description}</p>
+          <header className="settings-section-header">
+            <p className="settings-kicker">SETTINGS</p>
+            <h1>{category.label}</h1>
+            {category.description ? <p>{category.description}</p> : null}
+          </header>
           {category.id === "security" ? (
             <SecuritySettings onResetAuthenticated={onResetAuthenticated} />
           ) : null}

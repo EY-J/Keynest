@@ -790,6 +790,54 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_repeated_copies_replace_ownership_without_old_timer_clearing_new_value() {
+        let port = Arc::new(FakeClipboard::default());
+        let scheduler = Arc::new(FakeScheduler::default());
+        let service = service_with_scheduler(port.clone(), scheduler.clone());
+        service.copy_secret("first fixture secret").unwrap();
+        service.set_timeout(Duration::from_secs(10)).unwrap();
+        service.copy_secret("second fixture secret").unwrap();
+        assert_eq!(
+            scheduler.delays(),
+            [Duration::from_secs(30), Duration::from_secs(10)]
+        );
+        scheduler.run_next(); // Even out-of-order delivery of the obsolete job is harmless.
+        assert_eq!(port.text(), "second fixture secret");
+        assert_eq!(port.clear_count(), 0);
+        scheduler.run_next();
+        assert_eq!(port.text(), "");
+        assert!(!service.has_owned_value_for_test());
+    }
+
+    #[test]
+    fn scheduled_timeout_preserves_external_replacement_and_discards_secret_ownership() {
+        let port = Arc::new(FakeClipboard::default());
+        let scheduler = Arc::new(FakeScheduler::default());
+        let service = service_with_scheduler(port.clone(), scheduler.clone());
+        service.copy_secret("fixture secret").unwrap();
+        port.set_text("user replacement");
+        scheduler.run_next();
+        assert_eq!(port.text(), "user replacement");
+        assert_eq!(port.clear_count(), 0);
+        assert!(!service.has_owned_value_for_test());
+    }
+
+    #[test]
+    fn lock_cleanup_invalidates_scheduled_jobs_before_later_external_copy() {
+        let port = Arc::new(FakeClipboard::default());
+        let scheduler = Arc::new(FakeScheduler::default());
+        let service = service_with_scheduler(port.clone(), scheduler.clone());
+        service.copy_secret("fixture secret").unwrap();
+        service.clear_if_owned().unwrap();
+        assert_eq!(port.text(), "");
+        port.set_text("user text after lock");
+        scheduler.run_next();
+        assert_eq!(port.text(), "user text after lock");
+        assert_eq!(port.clear_count(), 1);
+        assert!(!service.has_owned_value_for_test());
+    }
+
+    #[test]
     fn copy_captures_timeout_after_a_blocked_write_succeeds() {
         let port = Arc::new(FakeClipboard::default());
         port.block_write();

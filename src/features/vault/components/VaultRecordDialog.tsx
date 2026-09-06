@@ -1,7 +1,8 @@
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { vaultClient } from "../vaultClient";
-import type { VaultRecord, VaultRecordInput } from "../types";
+import type { VaultRecord, VaultRecordInput, VaultRecordSummary } from "../types";
 import VaultModal from "./VaultModal";
+import { ModalCloseButton, useModalClose } from "../../../shared/components/Modal/Modal";
 import VaultRecordForm from "./VaultRecordForm";
 
 type VaultRecordDialogProps = {
@@ -17,10 +18,12 @@ export default function VaultRecordDialog({
   onChanged,
   fallbackFocusRef,
 }: VaultRecordDialogProps) {
-  const [record, setRecord] = useState<VaultRecord | null>(null);
+  const [record, setRecord] = useState<VaultRecordSummary | null>(null);
+  const [editRecord, setEditRecord] = useState<VaultRecord | null>(null);
+  const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isRevealed, setIsRevealed] = useState(false);
+  const isRevealed = revealedPassword !== null;
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -30,6 +33,31 @@ export default function VaultRecordDialog({
   const editNameRef = useRef<HTMLInputElement>(null);
   const deleteConfirmationRef = useRef<HTMLInputElement>(null);
   const generationRef = useRef(0);
+  const revealRequestRef = useRef(0);
+  const modal = useModalClose(finishClose);
+
+  useEffect(() => {
+    function hide() {
+      revealRequestRef.current += 1;
+      setRevealedPassword(null);
+    }
+    function hideWhenBackgrounded() {
+      if (document.hidden) hide();
+    }
+    window.addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", hideWhenBackgrounded);
+    return () => {
+      revealRequestRef.current += 1;
+      window.removeEventListener("blur", hide);
+      document.removeEventListener("visibilitychange", hideWhenBackgrounded);
+    };
+  }, [recordId]);
+
+  useEffect(() => {
+    if (revealedPassword === null) return;
+    const timer = window.setTimeout(() => setRevealedPassword(null), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [revealedPassword, recordId]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -37,13 +65,14 @@ export default function VaultRecordDialog({
     setError("");
     setStatus("");
     setIsLoading(true);
-    setIsRevealed(false);
+    setRevealedPassword(null);
+    setEditRecord(null);
     setIsEditing(false);
     setIsDeleting(false);
     setDeleteConfirmation("");
     setIsPending(false);
     void vaultClient
-      .getVaultRecord(recordId)
+      .getVaultRecordSummary(recordId)
       .then(
         (loaded) => {
           if (generationRef.current === generation) {
@@ -61,6 +90,10 @@ export default function VaultRecordDialog({
           setIsLoading(false);
         }
       });
+    return () => {
+      // Lock/navigation unmounts this dialog; late IPC responses must stay discarded.
+      generationRef.current += 1;
+    };
   }, [recordId]);
 
   useEffect(() => {
@@ -69,20 +102,47 @@ export default function VaultRecordDialog({
         editNameRef.current?.focus();
       } else if (isDeleting) {
         deleteConfirmationRef.current?.focus();
-      } else {
-        closeButtonRef.current?.focus();
       }
     });
   }, [isDeleting, isEditing]);
 
   function close() {
-    if (isPending) {
-      return;
-    }
+    if (!isPending) modal.close();
+  }
+
+  function finishClose() {
     generationRef.current += 1;
     setRecord(null);
-    setIsRevealed(false);
+    setRevealedPassword(null);
+    setEditRecord(null);
     onClose();
+  }
+
+  async function loadSecret(purpose: "reveal" | "edit") {
+    if (isPending) return;
+    if (purpose === "reveal" && isRevealed) {
+      setRevealedPassword(null);
+      return;
+    }
+    const generation = generationRef.current;
+    const revealRequest = ++revealRequestRef.current;
+    setRevealedPassword(null);
+    setError("");
+    setIsPending(true);
+    try {
+      const loaded = await vaultClient.getVaultRecord(recordId);
+      if (generationRef.current !== generation || loaded.id !== recordId) return;
+      if (purpose === "edit") {
+        setEditRecord(loaded);
+        setIsEditing(true);
+      } else if (revealRequestRef.current === revealRequest && !document.hidden) {
+        setRevealedPassword(loaded.password);
+      }
+    } catch {
+      if (generationRef.current === generation) setError("KeyNest could not load this credential.");
+    } finally {
+      if (generationRef.current === generation) setIsPending(false);
+    }
   }
 
   async function copyPassword() {
@@ -117,8 +177,7 @@ export default function VaultRecordDialog({
     if (generationRef.current !== generation) {
       return;
     }
-    setRecord(null);
-    close();
+    modal.close();
   }
 
   async function remove() {
@@ -137,8 +196,7 @@ export default function VaultRecordDialog({
       if (generationRef.current !== generation) {
         return;
       }
-      setRecord(null);
-      close();
+      modal.close();
     } catch {
       if (generationRef.current === generation) {
         setError("KeyNest could not delete this credential.");
@@ -154,6 +212,8 @@ export default function VaultRecordDialog({
   return (
     <VaultModal
       titleId="vault-record-dialog-title"
+      closing={modal.closing}
+      onExitComplete={modal.finishClose}
       onRequestClose={close}
       isDismissDisabled={isPending}
       initialFocusRef={closeButtonRef}
@@ -164,16 +224,7 @@ export default function VaultRecordDialog({
           <p className="eyebrow">PASSWORD VAULT</p>
           <h2 id="vault-record-dialog-title">{title}</h2>
         </div>
-        <button
-          ref={closeButtonRef}
-          className="vault-close-button"
-          type="button"
-          onClick={close}
-          disabled={isPending}
-          aria-label="Close credential"
-        >
-          ×
-        </button>
+        <ModalCloseButton buttonRef={closeButtonRef} label="Close credential" onClick={close} disabled={isPending || modal.closing} />
       </div>
       {isLoading ? (
         <p className="vault-status" role="status">
@@ -190,11 +241,11 @@ export default function VaultRecordDialog({
           {status}
         </p>
       ) : null}
-      {record && isEditing ? (
+      {editRecord && isEditing ? (
         <VaultRecordForm
-          initialRecord={record}
+          initialRecord={editRecord}
           onSubmit={update}
-          onCancel={() => setIsEditing(false)}
+          onCancel={() => { setIsEditing(false); setEditRecord(null); }}
           onPendingChange={setIsPending}
           initialFocusRef={editNameRef}
         />
@@ -211,10 +262,6 @@ export default function VaultRecordDialog({
               {record.website}
             </p>
           ) : null}
-          <p>
-            <span>Category</span>
-            {record.category}
-          </p>
           {record.tags.length ? (
             <p>
               <span>Tags</span>
@@ -227,14 +274,14 @@ export default function VaultRecordDialog({
               aria-label="Password"
               type={isRevealed ? "text" : "password"}
               readOnly
-              value={isRevealed ? record.password : "••••••••"}
+              value={revealedPassword ?? "••••••••"}
             />
           </label>
           <div className="vault-dialog-actions">
             <button
               className="secondary-button"
               type="button"
-              onClick={() => setIsRevealed((value) => !value)}
+              onClick={() => void loadSecret("reveal")}
               disabled={isPending}
             >
               {isRevealed ? "Hide" : "Reveal"}
@@ -252,7 +299,7 @@ export default function VaultRecordDialog({
             <button
               className="secondary-button"
               type="button"
-              onClick={() => setIsEditing(true)}
+              onClick={() => void loadSecret("edit")}
               disabled={isPending}
             >
               Edit
@@ -260,7 +307,7 @@ export default function VaultRecordDialog({
             <button
               className="vault-danger-button"
               type="button"
-              onClick={() => setIsDeleting(true)}
+              onClick={() => { setRevealedPassword(null); setIsDeleting(true); }}
               disabled={isPending}
             >
               Delete

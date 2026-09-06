@@ -46,6 +46,7 @@ impl SettingsService {
         SettingsSnapshot {
             auto_lock_seconds: inner.values.auto_lock_seconds,
             clipboard_clear_seconds: inner.values.clipboard_clear_seconds,
+            lock_on_sleep: inner.values.lock_on_sleep,
             theme: inner.values.theme,
             launch_at_startup,
             warning: inner.warning.clone(),
@@ -66,6 +67,10 @@ impl SettingsService {
         }
 
         self.replace_values(|values| values.clipboard_clear_seconds = seconds)
+    }
+
+    pub(crate) fn set_lock_on_sleep(&self, enabled: bool) -> Result<(), SettingsError> {
+        self.replace_values(|values| values.lock_on_sleep = enabled)
     }
 
     pub(crate) fn set_theme(&self, theme: ThemePreference) -> Result<(), SettingsError> {
@@ -163,6 +168,7 @@ mod tests {
         let expected = SettingsValues {
             auto_lock_seconds: 900,
             clipboard_clear_seconds: 60,
+            lock_on_sleep: true,
             theme: ThemePreference::Light,
         };
         assert_eq!(store.load().unwrap(), SettingsLoad::Valid(expected));
@@ -207,6 +213,22 @@ mod tests {
             Err(SettingsError::Storage(_))
         ));
         assert_eq!(service.snapshot(false).theme, ThemePreference::System);
+    }
+
+    #[test]
+    fn sleep_lock_save_failure_preserves_memory_and_reset_restores_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let app_data_dir = temp.path().join("settings-data");
+        let service = SettingsService::load(SettingsStore::new(app_data_dir.clone())).unwrap();
+        std::fs::write(&app_data_dir, b"blocks directory creation").unwrap();
+
+        assert!(service.set_lock_on_sleep(false).is_err());
+        assert!(service.snapshot(false).lock_on_sleep);
+
+        let service = SettingsService::load(SettingsStore::new(temp.path().to_path_buf())).unwrap();
+        service.set_lock_on_sleep(false).unwrap();
+        service.reset().unwrap();
+        assert!(service.snapshot(false).lock_on_sleep);
     }
 
     #[test]

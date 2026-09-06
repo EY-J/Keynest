@@ -7,6 +7,7 @@ type AuthLayoutProps = {
   title: string;
   description: string;
   children: ReactNode;
+  background?: ReactNode;
 };
 
 export default function AuthLayout({
@@ -14,10 +15,12 @@ export default function AuthLayout({
   title,
   description,
   children,
+  background,
 }: AuthLayoutProps) {
   return (
-    <div className="auth-shell">
+    <div className={`auth-shell${background ? " auth-shell-with-background" : ""}`}>
       <AppTitleBar />
+      {background}
       <main className="auth-page">
         <section className="auth-content" aria-labelledby="auth-title">
           <BrandMark className="auth-mark" />

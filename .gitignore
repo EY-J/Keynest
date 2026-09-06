@@ -11,6 +11,14 @@ node_modules
 dist
 dist-ssr
 *.local
+# Signing credentials and machine-specific release overrides
+*.pfx
+*.p12
+*.key
+*.pem
+.env
+.env.*
+src-tauri/tauri.signing.local.json
 .worktrees/
 
 # Local agent tooling

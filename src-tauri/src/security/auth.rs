@@ -5,16 +5,18 @@ use std::{
 
 use serde::Serialize;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use super::{
     crypto::{
-        unwrap_vault_key, wrap_existing_vault_key, wrap_new_vault_key, CryptoError, EntropySource,
-        KdfParams, VaultKey,
+        generate_recovery_key, unwrap_recovery_vault_key, unwrap_vault_key,
+        wrap_existing_vault_key, wrap_new_vault_key, wrap_recovery_vault_key, CryptoError,
+        EntropySource, KdfParams, VaultKey,
     },
+    password_policy::validate_master_password,
     storage::{ProfileLoad, ProfileStore, StorageError, StoredProfile},
 };
 
-const MINIMUM_PASSWORD_CHARACTERS: usize = 12;
 const RESET_CONFIRMATION: &str = "RESET KEYNEST";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -32,6 +34,12 @@ pub(crate) struct LockOutcome {
     pub transitioned: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RecoveryStatus {
+    pub configured: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct AuthService {
     inner: Arc<Mutex<AuthInner>>,
@@ -43,7 +51,7 @@ pub(crate) struct AuthService {
 struct AuthInner {
     state: AuthState,
     failed_attempts: u32,
-    next_allowed_at: Option<Instant>,
+    last_failed_at: Option<Instant>,
 }
 
 enum AuthState {
@@ -64,14 +72,14 @@ impl AuthService {
     ) -> Self {
         let state = match store.load() {
             Ok(ProfileLoad::Missing) => AuthState::SetupRequired,
-            Ok(ProfileLoad::Valid(profile)) => AuthState::Locked(profile),
+            Ok(ProfileLoad::Valid(profile)) => AuthState::Locked(*profile),
             Err(_) => AuthState::DataError,
         };
         Self {
             inner: Arc::new(Mutex::new(AuthInner {
                 state,
                 failed_attempts: 0,
-                next_allowed_at: None,
+                last_failed_at: None,
             })),
             store,
             kdf_params,
@@ -88,10 +96,11 @@ impl AuthService {
         }
     }
 
-    pub(crate) fn create_master_password(&self, password: &str) -> Result<(), AuthError> {
-        if password.chars().count() < MINIMUM_PASSWORD_CHARACTERS {
-            return Err(AuthError::PasswordTooShort);
-        }
+    pub(crate) fn create_master_password(
+        &self,
+        password: &str,
+    ) -> Result<Zeroizing<String>, AuthError> {
+        validate_master_password(password)?;
 
         let mut inner = self.lock_inner();
         match inner.state {
@@ -105,32 +114,154 @@ impl AuthService {
         let (wrapped_key, vault_key) =
             wrap_new_vault_key(password, self.kdf_params, self.entropy.as_ref())
                 .map_err(|_| AuthError::LocalDataFailure)?;
-        let profile = StoredProfile::new(wrapped_key);
+        let recovery_key = generate_recovery_key(self.entropy.as_ref())
+            .map_err(|_| AuthError::LocalDataFailure)?;
+        let recovery_wrapped_key = wrap_recovery_vault_key(
+            &recovery_key,
+            vault_key.expose(),
+            self.kdf_params,
+            self.entropy.as_ref(),
+        )
+        .map_err(|_| AuthError::LocalDataFailure)?;
+        let profile = StoredProfile::with_recovery(wrapped_key, recovery_wrapped_key);
         if self.store.create(&profile).is_err() {
             inner.state = AuthState::DataError;
             return Err(AuthError::LocalDataFailure);
         }
 
         inner.failed_attempts = 0;
-        inner.next_allowed_at = None;
+        inner.last_failed_at = None;
         inner.state = AuthState::Unlocked { profile, vault_key };
-        Ok(())
+        Ok(recovery_key)
+    }
+
+    pub(crate) fn recovery_status(&self) -> Result<RecoveryStatus, AuthError> {
+        let inner = self.lock_inner();
+        let configured = match &inner.state {
+            AuthState::Locked(profile) | AuthState::Unlocked { profile, .. } => {
+                profile.recovery_wrapped_key.is_some()
+            }
+            AuthState::SetupRequired => false,
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        Ok(RecoveryStatus { configured })
+    }
+
+    pub(crate) fn recover_master_password(
+        &self,
+        recovery_key: &str,
+        new_password: &str,
+    ) -> Result<Zeroizing<String>, AuthError> {
+        self.recover_master_password_with_clock(recovery_key, new_password, Instant::now)
+    }
+
+    fn recover_master_password_with_clock(
+        &self,
+        recovery_key: &str,
+        new_password: &str,
+        now: impl Fn() -> Instant,
+    ) -> Result<Zeroizing<String>, AuthError> {
+        validate_master_password(new_password)?;
+
+        let mut inner = self.lock_inner();
+        check_attempt_delay(&inner, now())?;
+        let profile = match &inner.state {
+            AuthState::Locked(profile) => profile.clone(),
+            AuthState::Unlocked { .. } => return Err(AuthError::Unauthorized),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        let recovery_wrapped_key = profile
+            .recovery_wrapped_key
+            .as_ref()
+            .ok_or(AuthError::RecoveryNotConfigured)?;
+        let vault_key = match unwrap_recovery_vault_key(recovery_key, recovery_wrapped_key) {
+            Ok(key) => key,
+            Err(CryptoError::AuthenticationFailed | CryptoError::InvalidRecoveryKey) => {
+                return Err(record_failed_attempt(
+                    &mut inner,
+                    now(),
+                    AuthError::InvalidRecoveryKey,
+                ));
+            }
+            Err(_) => {
+                inner.state = AuthState::DataError;
+                return Err(AuthError::DataDamaged);
+            }
+        };
+
+        let wrapped_key = wrap_existing_vault_key(
+            new_password,
+            vault_key.expose(),
+            self.kdf_params,
+            self.entropy.as_ref(),
+        )
+        .map_err(|_| AuthError::LocalDataFailure)?;
+        let replacement_recovery_key = generate_recovery_key(self.entropy.as_ref())
+            .map_err(|_| AuthError::LocalDataFailure)?;
+        let replacement_recovery_wrapped_key = wrap_recovery_vault_key(
+            &replacement_recovery_key,
+            vault_key.expose(),
+            self.kdf_params,
+            self.entropy.as_ref(),
+        )
+        .map_err(|_| AuthError::LocalDataFailure)?;
+        let replacement =
+            StoredProfile::with_recovery(wrapped_key, replacement_recovery_wrapped_key);
+        self.store.replace(&replacement)?;
+        inner.failed_attempts = 0;
+        inner.last_failed_at = None;
+        inner.state = AuthState::Unlocked {
+            profile: replacement,
+            vault_key,
+        };
+        Ok(replacement_recovery_key)
+    }
+
+    pub(crate) fn regenerate_recovery_key(
+        &self,
+        current_password: &str,
+    ) -> Result<Zeroizing<String>, AuthError> {
+        let mut inner = self.lock_inner();
+        let (profile, vault_key) = match &mut inner.state {
+            AuthState::Unlocked { profile, vault_key } => (profile, vault_key),
+            AuthState::Locked(_) => return Err(AuthError::Unauthorized),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        verify_master_password(current_password, profile, vault_key)?;
+
+        let recovery_key = generate_recovery_key(self.entropy.as_ref())
+            .map_err(|_| AuthError::LocalDataFailure)?;
+        let recovery_wrapped_key = wrap_recovery_vault_key(
+            &recovery_key,
+            vault_key.expose(),
+            self.kdf_params,
+            self.entropy.as_ref(),
+        )
+        .map_err(|_| AuthError::LocalDataFailure)?;
+        let replacement = profile.replacing_recovery_wrapper(recovery_wrapped_key);
+        self.store.replace(&replacement)?;
+        *profile = replacement;
+        Ok(recovery_key)
     }
 
     pub(crate) fn unlock(&self, password: &str) -> Result<(), AuthError> {
-        self.unlock_at(password, Instant::now())
+        self.unlock_with_clock(password, Instant::now)
     }
 
+    #[cfg(test)]
     pub(crate) fn unlock_at(&self, password: &str, now: Instant) -> Result<(), AuthError> {
+        self.unlock_with_clock(password, || now)
+    }
+
+    fn unlock_with_clock(
+        &self,
+        password: &str,
+        now: impl Fn() -> Instant,
+    ) -> Result<(), AuthError> {
         let mut inner = self.lock_inner();
-        if let Some(next_allowed_at) = inner.next_allowed_at {
-            if next_allowed_at > now {
-                let remaining = next_allowed_at.duration_since(now);
-                return Err(AuthError::Throttled {
-                    retry_after_ms: remaining.as_millis().max(1) as u64,
-                });
-            }
-        }
+        check_attempt_delay(&inner, now())?;
 
         let profile = match &inner.state {
             AuthState::Locked(profile) => profile.clone(),
@@ -142,14 +273,15 @@ impl AuthService {
         match unwrap_vault_key(password, &profile.wrapped_key) {
             Ok(vault_key) => {
                 inner.failed_attempts = 0;
-                inner.next_allowed_at = None;
+                inner.last_failed_at = None;
                 inner.state = AuthState::Unlocked { profile, vault_key };
                 Ok(())
             }
-            Err(CryptoError::AuthenticationFailed) => {
-                record_failed_attempt(&mut inner, now);
-                Err(AuthError::InvalidCredentials)
-            }
+            Err(CryptoError::AuthenticationFailed) => Err(record_failed_attempt(
+                &mut inner,
+                now(),
+                AuthError::InvalidCredentials,
+            )),
             Err(_) => {
                 inner.state = AuthState::DataError;
                 Err(AuthError::DataDamaged)
@@ -182,9 +314,7 @@ impl AuthService {
         current_password: &str,
         new_password: &str,
     ) -> Result<(), AuthError> {
-        if new_password.chars().count() < MINIMUM_PASSWORD_CHARACTERS {
-            return Err(AuthError::PasswordTooShort);
-        }
+        validate_master_password(new_password)?;
 
         let mut inner = self.lock_inner();
         let (profile, vault_key) = match &mut inner.state {
@@ -194,16 +324,7 @@ impl AuthService {
             AuthState::DataError => return Err(AuthError::DataDamaged),
         };
 
-        let verified_key = match unwrap_vault_key(current_password, &profile.wrapped_key) {
-            Ok(key) => key,
-            Err(CryptoError::AuthenticationFailed) => {
-                return Err(AuthError::InvalidCredentials);
-            }
-            Err(_) => return Err(AuthError::DataDamaged),
-        };
-        if verified_key.expose() != vault_key.expose() {
-            return Err(AuthError::DataDamaged);
-        }
+        verify_master_password(current_password, profile, vault_key)?;
 
         let wrapped_key = wrap_existing_vault_key(
             new_password,
@@ -212,7 +333,7 @@ impl AuthService {
             self.entropy.as_ref(),
         )
         .map_err(|_| AuthError::LocalDataFailure)?;
-        let replacement = StoredProfile::new(wrapped_key);
+        let replacement = profile.replacing_master_wrapper(wrapped_key);
         self.store.replace(&replacement)?;
         *profile = replacement;
         Ok(())
@@ -258,7 +379,7 @@ impl AuthService {
         let mut inner = self.lock_inner();
         self.store.reset()?;
         inner.failed_attempts = 0;
-        inner.next_allowed_at = None;
+        inner.last_failed_at = None;
         inner.state = AuthState::SetupRequired;
         Ok(())
     }
@@ -292,12 +413,18 @@ impl AuthService {
 pub(crate) enum AuthError {
     #[error("the master password must contain at least 12 characters")]
     PasswordTooShort,
+    #[error("Master Password is too weak.")]
+    PasswordTooWeak,
     #[error("KeyNest already has a master password")]
     AlreadyInitialized,
     #[error("KeyNest needs a master password before it can be unlocked")]
     NotInitialized,
     #[error("the master password is incorrect")]
     InvalidCredentials,
+    #[error("recovery is not configured for this profile")]
+    RecoveryNotConfigured,
+    #[error("the recovery key is incorrect")]
+    InvalidRecoveryKey,
     #[error("wait before trying again")]
     Throttled { retry_after_ms: u64 },
     #[error("type RESET KEYNEST exactly to confirm")]
@@ -308,6 +435,22 @@ pub(crate) enum AuthError {
     DataDamaged,
     #[error("local KeyNest data could not be accessed")]
     LocalDataFailure,
+}
+
+fn verify_master_password(
+    current_password: &str,
+    profile: &StoredProfile,
+    vault_key: &VaultKey,
+) -> Result<(), AuthError> {
+    let verified_key = match unwrap_vault_key(current_password, &profile.wrapped_key) {
+        Ok(key) => key,
+        Err(CryptoError::AuthenticationFailed) => return Err(AuthError::InvalidCredentials),
+        Err(_) => return Err(AuthError::DataDamaged),
+    };
+    if verified_key.expose() != vault_key.expose() {
+        return Err(AuthError::DataDamaged);
+    }
+    Ok(())
 }
 
 impl From<StorageError> for AuthError {
@@ -321,20 +464,43 @@ impl From<StorageError> for AuthError {
     }
 }
 
-fn record_failed_attempt(inner: &mut AuthInner, now: Instant) {
-    inner.failed_attempts = inner.failed_attempts.saturating_add(1);
-    if inner.failed_attempts >= 3 {
-        let exponent = (inner.failed_attempts - 3).min(3);
-        let seconds = (1_u64 << exponent).min(5);
-        inner.next_allowed_at = Some(now + Duration::from_secs(seconds));
+fn attempt_delay(failed_attempts: u32) -> Duration {
+    Duration::from_secs(match failed_attempts {
+        0..=3 => 0,
+        4 => 2,
+        5 => 5,
+        6 => 10,
+        _ => 30,
+    })
+}
+
+fn check_attempt_delay(inner: &AuthInner, now: Instant) -> Result<(), AuthError> {
+    if let Some(last_failed_at) = inner.last_failed_at {
+        let remaining = attempt_delay(inner.failed_attempts)
+            .saturating_sub(now.saturating_duration_since(last_failed_at));
+        if !remaining.is_zero() {
+            // Round up so sub-millisecond remainder does not enable an early retry.
+            return Err(AuthError::Throttled {
+                retry_after_ms: remaining.as_nanos().div_ceil(1_000_000) as u64,
+            });
+        }
     }
+    Ok(())
+}
+
+fn record_failed_attempt(inner: &mut AuthInner, now: Instant, error: AuthError) -> AuthError {
+    inner.failed_attempts = inner.failed_attempts.saturating_add(1);
+    // Sample after verification and after acquiring the auth lock: neither KDF
+    // time nor queued requests may consume the cooldown. No sleep/deadline addition.
+    inner.last_failed_at = Some(now);
+    check_attempt_delay(inner, now).err().unwrap_or(error)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU8, Ordering},
             Arc,
         },
         time::{Duration, Instant},
@@ -365,6 +531,24 @@ mod tests {
             let length = destination.len() as u8;
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = length.wrapping_add(index as u8).wrapping_add(1);
+            }
+            Ok(())
+        }
+    }
+
+    struct CountingEntropy(AtomicU8);
+
+    impl CountingEntropy {
+        fn new() -> Self {
+            Self(AtomicU8::new(1))
+        }
+    }
+
+    impl EntropySource for CountingEntropy {
+        fn fill(&self, destination: &mut [u8]) -> Result<(), CryptoError> {
+            let seed = self.0.fetch_add(1, Ordering::SeqCst);
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = seed.wrapping_add(index as u8);
             }
             Ok(())
         }
@@ -405,7 +589,7 @@ mod tests {
         fn new() -> Self {
             let temp = tempfile::tempdir().unwrap();
             let params = KdfParams::testing();
-            let store = ProfileStore::new(temp.path().to_path_buf(), params);
+            let store = ProfileStore::new(temp.path().to_path_buf());
             let service = AuthService::load(store, params, Arc::new(FixedEntropy));
             Self { temp, service }
         }
@@ -414,7 +598,7 @@ mod tests {
             let temp = tempfile::tempdir().unwrap();
             std::fs::write(temp.path().join("profile.json"), bytes).unwrap();
             let params = KdfParams::testing();
-            let store = ProfileStore::new(temp.path().to_path_buf(), params);
+            let store = ProfileStore::new(temp.path().to_path_buf());
             let service = AuthService::load(store, params, Arc::new(FixedEntropy));
             Self { temp, service }
         }
@@ -430,6 +614,96 @@ mod tests {
             assert!(self.temp.path().join("profile.json").is_file());
             assert!(self.temp.path().join("vault.enc").is_file());
         }
+    }
+
+    #[test]
+    fn stored_kdf_survives_new_defaults_and_password_change_only_rewraps_master_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let old_defaults = KdfParams::production();
+        let new_defaults = KdfParams {
+            iterations: 4,
+            ..old_defaults
+        };
+        let service = AuthService::load(store.clone(), old_defaults, Arc::new(FixedEntropy));
+        let recovery_key = service
+            .create_master_password("a secure master password")
+            .unwrap();
+        let setup_profile = match store.load().unwrap() {
+            ProfileLoad::Valid(profile) => profile,
+            ProfileLoad::Missing => panic!("setup must persist a profile"),
+        };
+        assert_eq!(setup_profile.wrapped_key.params, old_defaults);
+        assert_eq!(
+            setup_profile.recovery_wrapped_key.as_ref().unwrap().params,
+            old_defaults
+        );
+        let original_key = service
+            .require_vault_key(|key| Zeroizing::new(*key))
+            .unwrap();
+        let original_bytes = std::fs::read(store.profile_path()).unwrap();
+        service.lock();
+        drop(service);
+
+        let reloaded = AuthService::load(store.clone(), new_defaults, Arc::new(FixedEntropy));
+        assert_eq!(reloaded.status(), AuthStatus::Locked);
+        reloaded.unlock("a secure master password").unwrap();
+        assert!(reloaded
+            .require_vault_key(|key| key == original_key.as_ref())
+            .unwrap());
+        assert_eq!(std::fs::read(store.profile_path()).unwrap(), original_bytes);
+        reloaded
+            .change_master_password("a secure master password", "a replacement secure password")
+            .unwrap();
+        let changed = match store.load().unwrap() {
+            ProfileLoad::Valid(profile) => profile,
+            ProfileLoad::Missing => panic!("password change must retain the profile"),
+        };
+        assert_eq!(changed.wrapped_key.params, new_defaults);
+        assert_eq!(
+            changed.recovery_wrapped_key,
+            setup_profile.recovery_wrapped_key
+        );
+        assert!(reloaded
+            .require_vault_key(|key| key == original_key.as_ref())
+            .unwrap());
+        reloaded.lock();
+        drop(reloaded);
+        // Also model loading a newer wrapper with older creation defaults.
+        let reloaded = AuthService::load(store, old_defaults, Arc::new(FixedEntropy));
+        reloaded.unlock("a replacement secure password").unwrap();
+        assert!(reloaded
+            .require_vault_key(|key| key == original_key.as_ref())
+            .unwrap());
+        // The untouched recovery wrapper still uses its own stored KDF parameters.
+        assert!(
+            unwrap_recovery_vault_key(
+                &recovery_key,
+                changed.recovery_wrapped_key.as_ref().unwrap()
+            )
+            .unwrap()
+            .expose()
+                == original_key.as_ref()
+        );
+    }
+
+    #[test]
+    fn existing_weak_password_remains_unlockable_after_policy_upgrade() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        // Model a pre-policy profile without using the newly restricted setup API.
+        let password = "123456789012";
+        let (wrapped, _) = wrap_new_vault_key(password, params, &FixedEntropy).unwrap();
+        store.create(&StoredProfile::new(wrapped)).unwrap();
+        let before = std::fs::read(temp.path().join("profile.json")).unwrap();
+        let service = AuthService::load(store, params, Arc::new(FixedEntropy));
+        service.unlock(password).unwrap();
+        assert_eq!(service.status(), AuthStatus::Unlocked);
+        assert_eq!(
+            std::fs::read(temp.path().join("profile.json")).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -708,7 +982,163 @@ mod tests {
     }
 
     #[test]
-    fn third_and_later_failures_enforce_a_capped_delay() {
+    fn unlock_and_recovery_enforce_the_same_capped_schedule_and_reset_on_success() {
+        for recovery in [false, true] {
+            let fixture = AuthFixture::new();
+            let key = fixture
+                .service
+                .create_master_password("a secure master password")
+                .unwrap();
+            std::fs::write(
+                fixture.temp.path().join("vault.enc"),
+                b"unchanged encrypted fixture",
+            )
+            .unwrap();
+            fixture.service.lock();
+            let profile = std::fs::read(fixture.service.store.profile_path()).unwrap();
+            let mut now = Instant::now();
+            for (index, seconds) in [0, 0, 0, 2, 5, 10, 30, 30].into_iter().enumerate() {
+                let result = if recovery {
+                    fixture
+                        .service
+                        .recover_master_password_with_clock(
+                            "KN-R1-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF",
+                            "a replacement master password",
+                            || now,
+                        )
+                        .map(|_| ())
+                } else {
+                    fixture.service.unlock_at("incorrect password", now)
+                };
+                let expected = if seconds == 0 {
+                    if recovery {
+                        AuthError::InvalidRecoveryKey
+                    } else {
+                        AuthError::InvalidCredentials
+                    }
+                } else {
+                    AuthError::Throttled {
+                        retry_after_ms: seconds * 1000,
+                    }
+                };
+                assert_eq!(result, Err(expected));
+                if seconds > 0 {
+                    let count = fixture.service.lock_inner().failed_attempts;
+                    assert_eq!(
+                        fixture.service.unlock_at("a secure master password", now),
+                        Err(AuthError::Throttled {
+                            retry_after_ms: seconds * 1000
+                        })
+                    );
+                    assert_eq!(fixture.service.lock_inner().failed_attempts, count);
+                }
+                assert_eq!(
+                    fixture.service.lock_inner().failed_attempts,
+                    index as u32 + 1
+                );
+                now += Duration::from_secs(seconds);
+            }
+            assert_eq!(
+                std::fs::read(fixture.service.store.profile_path()).unwrap(),
+                profile
+            );
+            assert_eq!(
+                std::fs::read(fixture.temp.path().join("vault.enc")).unwrap(),
+                b"unchanged encrypted fixture"
+            );
+            if recovery {
+                assert!(fixture
+                    .service
+                    .recover_master_password_with_clock(
+                        &key,
+                        "a replacement master password",
+                        || now,
+                    )
+                    .is_ok());
+            } else {
+                fixture
+                    .service
+                    .unlock_at("a secure master password", now)
+                    .unwrap();
+            }
+            assert_eq!(fixture.service.lock_inner().failed_attempts, 0);
+            assert!(fixture.service.lock_inner().last_failed_at.is_none());
+            fixture.service.lock();
+            assert_eq!(
+                fixture.service.unlock_at("incorrect password", now),
+                Err(AuthError::InvalidCredentials)
+            );
+        }
+    }
+
+    #[test]
+    fn alternating_flows_and_invalid_reset_do_not_bypass_the_shared_cooldown() {
+        let fixture = AuthFixture::new();
+        let key = fixture
+            .service
+            .create_master_password("a secure master password")
+            .unwrap();
+        fixture.service.lock();
+        let before = std::fs::read(fixture.service.store.profile_path()).unwrap();
+        let now = Instant::now();
+        for _ in 0..3 {
+            assert_eq!(
+                fixture.service.unlock_at("wrong", now),
+                Err(AuthError::InvalidCredentials)
+            );
+        }
+        assert!(matches!(
+            fixture.service.recover_master_password_with_clock(
+                "malformed key",
+                "a replacement master password",
+                || now,
+            ),
+            Err(AuthError::Throttled {
+                retry_after_ms: 2000
+            })
+        ));
+        assert!(matches!(
+            fixture.service.recover_master_password_with_clock(
+                &key,
+                "a replacement master password",
+                || now,
+            ),
+            Err(AuthError::Throttled {
+                retry_after_ms: 2000
+            })
+        ));
+        assert_eq!(
+            fixture.service.reset_keynest("RESET"),
+            Err(AuthError::InvalidResetConfirmation)
+        );
+        assert_eq!(
+            fixture
+                .service
+                .validate_authenticated_reset("a secure master password", "RESET KEYNEST"),
+            Err(AuthError::Unauthorized)
+        );
+        fixture.service.lock();
+        assert!(fixture.service.recovery_status().unwrap().configured);
+        assert_eq!(
+            fixture.service.unlock_at("a secure master password", now),
+            Err(AuthError::Throttled {
+                retry_after_ms: 2000
+            })
+        );
+        assert_eq!(
+            std::fs::read(fixture.service.store.profile_path()).unwrap(),
+            before
+        );
+        assert_eq!(fixture.service.lock_inner().failed_attempts, 4);
+        fixture
+            .service
+            .unlock_at("a secure master password", now + Duration::from_secs(2))
+            .unwrap();
+    }
+
+    #[test]
+    fn cooldown_starts_after_verification_and_uses_fresh_clock_samples() {
+        use std::cell::Cell;
         let fixture = AuthFixture::new();
         fixture
             .service
@@ -716,64 +1146,63 @@ mod tests {
             .unwrap();
         fixture.service.lock();
         let start = Instant::now();
-
+        for _ in 0..3 {
+            let _ = fixture.service.unlock_at("wrong", start);
+        }
+        let samples = Cell::new(0);
+        let result = fixture.service.unlock_with_clock("wrong", || {
+            let sample = samples.get();
+            samples.set(sample + 1);
+            start + Duration::from_secs(if sample == 0 { 0 } else { 15 })
+        });
+        assert_eq!(samples.get(), 2);
         assert_eq!(
-            fixture.service.unlock_at("wrong master password", start),
-            Err(AuthError::InvalidCredentials),
-        );
-        assert_eq!(
-            fixture.service.unlock_at("wrong master password", start),
-            Err(AuthError::InvalidCredentials),
-        );
-        assert_eq!(
-            fixture.service.unlock_at("wrong master password", start),
-            Err(AuthError::InvalidCredentials),
-        );
-        assert!(matches!(
-            fixture.service.unlock_at("wrong master password", start),
+            result,
             Err(AuthError::Throttled {
-                retry_after_ms: 1_000
+                retry_after_ms: 2000
             })
-        ));
-
-        let after_one_second = start + Duration::from_secs(1);
+        );
         assert_eq!(
             fixture
                 .service
-                .unlock_at("wrong master password", after_one_second),
-            Err(AuthError::InvalidCredentials),
-        );
-        assert!(matches!(
-            fixture
-                .service
-                .unlock_at("wrong master password", after_one_second),
+                .unlock_at("a secure master password", start + Duration::from_secs(15)),
             Err(AuthError::Throttled {
-                retry_after_ms: 2_000
+                retry_after_ms: 2000
             })
-        ));
+        );
+        fixture
+            .service
+            .unlock_at("a secure master password", start + Duration::from_secs(17))
+            .unwrap();
+    }
 
-        let after_three_seconds = start + Duration::from_secs(3);
+    #[test]
+    fn saturated_counters_and_submillisecond_remainders_stay_bounded() {
+        let fixture = AuthFixture::new();
+        let now = Instant::now();
+        let mut inner = fixture.service.lock_inner();
+        inner.failed_attempts = u32::MAX;
         assert_eq!(
-            fixture
-                .service
-                .unlock_at("wrong master password", after_three_seconds),
-            Err(AuthError::InvalidCredentials),
+            record_failed_attempt(&mut inner, now, AuthError::InvalidCredentials),
+            AuthError::Throttled {
+                retry_after_ms: 30_000
+            }
         );
-        let after_seven_seconds = start + Duration::from_secs(7);
+        assert_eq!(inner.failed_attempts, u32::MAX);
         assert_eq!(
-            fixture
-                .service
-                .unlock_at("wrong master password", after_seven_seconds),
-            Err(AuthError::InvalidCredentials),
+            check_attempt_delay(&inner, now + Duration::from_micros(29_999_999)),
+            Err(AuthError::Throttled { retry_after_ms: 1 })
         );
-        assert!(matches!(
-            fixture
-                .service
-                .unlock_at("wrong master password", after_seven_seconds),
+        assert_eq!(
+            check_attempt_delay(&inner, now + Duration::from_secs(30)),
+            Ok(())
+        );
+        assert_eq!(
+            check_attempt_delay(&inner, now - Duration::from_secs(1)),
             Err(AuthError::Throttled {
-                retry_after_ms: 5_000
+                retry_after_ms: 30_000
             })
-        ));
+        );
     }
 
     #[test]
@@ -933,7 +1362,7 @@ mod tests {
     fn password_change_entropy_failure_preserves_disk_password_key_and_unlocked_session() {
         let temp = tempfile::tempdir().unwrap();
         let params = KdfParams::testing();
-        let store = ProfileStore::new(temp.path().to_path_buf(), params);
+        let store = ProfileStore::new(temp.path().to_path_buf());
         let entropy = Arc::new(SwitchableEntropy::working());
         let service = AuthService::load(store, params, entropy.clone());
         service
@@ -1011,6 +1440,241 @@ mod tests {
         assert_ne!(
             fixture.service.require_vault_key(|key| *key).unwrap(),
             mismatched_key_bytes
+        );
+    }
+
+    #[test]
+    fn fresh_setup_persists_two_wrappers_for_the_exact_same_vault_key_only() {
+        use crate::security::crypto::unwrap_recovery_vault_key;
+
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let service = AuthService::load(store.clone(), params, Arc::new(CountingEntropy::new()));
+        let recovery_key = service
+            .create_master_password("a secure master password")
+            .unwrap();
+        let live_key = service.require_vault_key(|key| *key).unwrap();
+        let ProfileLoad::Valid(profile) = store.load().unwrap() else {
+            panic!("profile must exist")
+        };
+        let password_key =
+            unwrap_vault_key("a secure master password", &profile.wrapped_key).unwrap();
+        let recovery_wrapped = profile.recovery_wrapped_key.as_ref().unwrap();
+        let recovered_key = unwrap_recovery_vault_key(&recovery_key, recovery_wrapped).unwrap();
+
+        assert_eq!(profile.format_version, 2);
+        assert_ne!(profile.wrapped_key.salt, recovery_wrapped.salt);
+        assert_ne!(profile.wrapped_key.nonce, recovery_wrapped.nonce);
+        assert_eq!(password_key.expose(), &live_key);
+        assert_eq!(recovered_key.expose(), &live_key);
+        assert!(service.recovery_status().unwrap().configured);
+        let profile_bytes = std::fs::read(store.profile_path()).unwrap();
+        assert!(!profile_bytes
+            .windows(recovery_key.len())
+            .any(|window| window == recovery_key.as_bytes()));
+    }
+
+    #[test]
+    fn legacy_profile_unlocks_and_reports_recovery_not_configured() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let (wrapped, expected_key) =
+            wrap_new_vault_key("legacy master password", params, &CountingEntropy::new()).unwrap();
+        store.create(&StoredProfile::new(wrapped)).unwrap();
+        std::fs::write(temp.path().join("vault.enc"), b"legacy encrypted vault").unwrap();
+        let service = AuthService::load(store, params, Arc::new(CountingEntropy::new()));
+
+        assert!(!service.recovery_status().unwrap().configured);
+        assert_eq!(
+            service.recover_master_password(
+                "KN-R1-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF",
+                "replacement master password"
+            ),
+            Err(AuthError::RecoveryNotConfigured)
+        );
+        service.unlock("legacy master password").unwrap();
+        assert_eq!(
+            service.require_vault_key(|key| *key).unwrap(),
+            *expected_key.expose()
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("vault.enc")).unwrap(),
+            b"legacy encrypted vault"
+        );
+        let recovery_key = service
+            .regenerate_recovery_key("legacy master password")
+            .unwrap();
+        assert!(recovery_key.starts_with("KN-R1-"));
+        assert_eq!(
+            service.require_vault_key(|key| *key).unwrap(),
+            *expected_key.expose()
+        );
+        assert!(service.recovery_status().unwrap().configured);
+        assert_eq!(
+            std::fs::read(temp.path().join("vault.enc")).unwrap(),
+            b"legacy encrypted vault"
+        );
+    }
+
+    #[test]
+    fn password_change_preserves_recovery_wrapper_vault_key_and_vault_bytes() {
+        use crate::security::crypto::unwrap_recovery_vault_key;
+
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let service = AuthService::load(store.clone(), params, Arc::new(CountingEntropy::new()));
+        let recovery_key = service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let original_key = service.require_vault_key(|key| *key).unwrap();
+        std::fs::write(
+            temp.path().join("vault.enc"),
+            b"unchanged encrypted records",
+        )
+        .unwrap();
+        let ProfileLoad::Valid(before) = store.load().unwrap() else {
+            panic!("profile must exist")
+        };
+
+        service
+            .change_master_password("old secure master password", "new secure master password")
+            .unwrap();
+        let ProfileLoad::Valid(after) = store.load().unwrap() else {
+            panic!("profile must exist")
+        };
+
+        assert_eq!(before.recovery_wrapped_key, after.recovery_wrapped_key);
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), original_key);
+        assert_eq!(
+            unwrap_recovery_vault_key(&recovery_key, after.recovery_wrapped_key.as_ref().unwrap())
+                .unwrap()
+                .expose(),
+            &original_key
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("vault.enc")).unwrap(),
+            b"unchanged encrypted records"
+        );
+    }
+
+    #[test]
+    fn recovery_rotates_credentials_preserves_vault_key_and_never_touches_vault_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let service = AuthService::load(store, params, Arc::new(CountingEntropy::new()));
+        let old_recovery_key = service
+            .create_master_password("old secure master password")
+            .unwrap();
+        let original_key = service.require_vault_key(|key| *key).unwrap();
+        let vault_bytes = b"ciphertext remains byte-for-byte identical";
+        std::fs::write(temp.path().join("vault.enc"), vault_bytes).unwrap();
+        service.lock();
+
+        let new_recovery_key = service
+            .recover_master_password(&old_recovery_key, "new secure master password")
+            .unwrap();
+        assert_ne!(new_recovery_key.as_str(), old_recovery_key.as_str());
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), original_key);
+        assert_eq!(
+            std::fs::read(temp.path().join("vault.enc")).unwrap(),
+            vault_bytes
+        );
+        service.lock();
+        assert_eq!(
+            service.unlock("old secure master password"),
+            Err(AuthError::InvalidCredentials)
+        );
+        service.unlock("new secure master password").unwrap();
+        service.lock();
+        assert_eq!(
+            service.recover_master_password(&old_recovery_key, "another secure master password"),
+            Err(AuthError::InvalidRecoveryKey)
+        );
+        service
+            .recover_master_password(&new_recovery_key, "another secure master password")
+            .unwrap();
+        assert_eq!(service.require_vault_key(|key| *key).unwrap(), original_key);
+    }
+
+    #[test]
+    fn wrong_recovery_and_failed_atomic_write_preserve_profile_and_retry_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let service = AuthService::load(store.clone(), params, Arc::new(CountingEntropy::new()));
+        let recovery_key = service
+            .create_master_password("old secure master password")
+            .unwrap();
+        service.lock();
+        let before = std::fs::read(store.profile_path()).unwrap();
+
+        assert_eq!(
+            service.recover_master_password(
+                "KN-R1-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF",
+                "new secure master password"
+            ),
+            Err(AuthError::InvalidRecoveryKey)
+        );
+        assert_eq!(std::fs::read(store.profile_path()).unwrap(), before);
+
+        store.fail_next_replace_for_test();
+        assert_eq!(
+            service.recover_master_password(&recovery_key, "new secure master password"),
+            Err(AuthError::LocalDataFailure)
+        );
+        assert_eq!(service.status(), AuthStatus::Locked);
+        assert_eq!(std::fs::read(store.profile_path()).unwrap(), before);
+        service.unlock("old secure master password").unwrap();
+        service.lock();
+        // A failed commit must not consume or rotate the user's only recovery key.
+        let replacement = service
+            .recover_master_password(&recovery_key, "new secure master password")
+            .unwrap();
+        assert!(replacement.as_str() != recovery_key.as_str());
+        service.lock();
+        service.unlock("new secure master password").unwrap();
+    }
+
+    #[test]
+    fn recovery_regeneration_requires_current_password_and_invalidates_previous_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let params = KdfParams::testing();
+        let store = ProfileStore::new(temp.path().to_path_buf());
+        let service = AuthService::load(store.clone(), params, Arc::new(CountingEntropy::new()));
+        let old_key = service
+            .create_master_password("a secure master password")
+            .unwrap();
+        let original_vault_key = service.require_vault_key(|key| *key).unwrap();
+        let before = std::fs::read(store.profile_path()).unwrap();
+        assert_eq!(
+            service.regenerate_recovery_key("wrong master password"),
+            Err(AuthError::InvalidCredentials)
+        );
+        assert_eq!(std::fs::read(store.profile_path()).unwrap(), before);
+
+        let new_key = service
+            .regenerate_recovery_key("a secure master password")
+            .unwrap();
+        assert_ne!(new_key.as_str(), old_key.as_str());
+        assert_eq!(
+            service.require_vault_key(|key| *key).unwrap(),
+            original_vault_key
+        );
+        service.lock();
+        assert_eq!(
+            service.recover_master_password(&old_key, "replacement master password"),
+            Err(AuthError::InvalidRecoveryKey)
+        );
+        service
+            .recover_master_password(&new_key, "replacement master password")
+            .unwrap();
+        assert_eq!(
+            service.require_vault_key(|key| *key).unwrap(),
+            original_vault_key
         );
     }
 }

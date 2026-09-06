@@ -42,6 +42,7 @@ export default function AppTitleBar({
 
       <div className="titlebar-window-controls">
         <button
+          className="keynest-button--icon"
           type="button"
           aria-label="Minimize window"
           onClick={() => void appWindow?.minimize()}
@@ -49,6 +50,7 @@ export default function AppTitleBar({
           <span className="window-minimize" />
         </button>
         <button
+          className="keynest-button--icon"
           type="button"
           aria-label="Maximize window"
           onClick={() => void appWindow?.toggleMaximize()}
@@ -56,7 +58,7 @@ export default function AppTitleBar({
           <span className="window-maximize" />
         </button>
         <button
-          className="window-close-button"
+          className="window-close-button keynest-button--icon"
           type="button"
           aria-label="Close window"
           onClick={() => void appWindow?.close()}

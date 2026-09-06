@@ -19,7 +19,6 @@ struct CredentialPayload {
     username: String,
     password: String,
     website: Option<String>,
-    category: String,
     tags: Vec<String>,
 }
 
@@ -30,7 +29,6 @@ impl From<&VaultRecordInput> for CredentialPayload {
             username: input.username.clone(),
             password: input.password.clone(),
             website: input.website.clone(),
-            category: input.category.clone(),
             tags: input.tags.clone(),
         }
     }
@@ -43,7 +41,6 @@ impl CredentialPayload {
             username: self.username.clone(),
             password: self.password.clone(),
             website: self.website.clone(),
-            category: self.category.clone(),
             tags: self.tags.clone(),
         }
     }
@@ -61,8 +58,8 @@ pub(super) fn encrypt(
     entropy: &dyn EntropySource,
 ) -> Result<EncryptedPayload, VaultError> {
     let payload = CredentialPayload::from(input);
-    let plaintext =
-        Zeroizing::new(serde_json::to_vec(&payload).map_err(|_| VaultError::DataDamaged)?);
+    let mut plaintext = Zeroizing::new(Vec::new());
+    serde_json::to_writer(&mut *plaintext, &payload).map_err(|_| VaultError::DataDamaged)?;
     let mut nonce = [0_u8; NONCE_LENGTH];
     entropy
         .fill(&mut nonce)
@@ -122,4 +119,28 @@ fn associated_data(id: &str) -> Vec<u8> {
     aad.extend_from_slice(AAD_PREFIX);
     aad.extend_from_slice(id.as_bytes());
     aad
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_credentials_remain_readable_without_category() {
+        let key = [7_u8; 32];
+        let nonce = [1_u8; NONCE_LENGTH];
+        let id = "legacy-record";
+        let plaintext = br#"{"name":"Example","username":"user","password":"secret","website":null,"category":"Personal","tags":["work"]}"#;
+        let cipher = XChaCha20Poly1305::new_from_slice(&key).unwrap();
+        let ciphertext = cipher.encrypt(
+            XNonce::from_slice(&nonce),
+            Payload { msg: plaintext, aad: &associated_data(id) },
+        ).unwrap();
+        let input = decrypt(FORMAT_VERSION, &nonce, &ciphertext, &key, id).unwrap();
+        assert_eq!(input.name, "Example");
+        assert_eq!(input.password, "secret");
+        assert_eq!(input.tags, vec!["work"]);
+        let serialized = serde_json::to_value(CredentialPayload::from(&input)).unwrap();
+        assert!(serialized.get("category").is_none());
+    }
 }

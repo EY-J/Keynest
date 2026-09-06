@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import VaultModal from "../features/vault/components/VaultModal";
+import { ModalCloseButton, useModalClose } from "../shared/components/Modal/Modal";
 import VaultRecordDialog from "../features/vault/components/VaultRecordDialog";
 import VaultRecordForm from "../features/vault/components/VaultRecordForm";
 import { vaultClient } from "../features/vault/vaultClient";
@@ -16,7 +17,6 @@ export default function PasswordVaultPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("");
   const [tag, setTag] = useState("");
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
@@ -44,30 +44,29 @@ export default function PasswordVaultPage() {
     void loadRecords();
   }, []);
 
-  const categories = useMemo(
-    () => [...new Set(records.map((record) => record.category))].sort(),
-    [records],
-  );
   const tags = useMemo(
     () => [...new Set(records.flatMap((record) => record.tags))].sort(),
     [records],
   );
   const filteredRecords = useMemo(() => {
     const query = normalized(search);
-    const selectedCategory = normalized(category);
     const selectedTag = normalized(tag);
 
     return records.filter((record) => {
-      const searchValues = [record.name, record.category, ...record.tags];
+      const searchValues = [record.name, ...record.tags];
       const matchesSearch =
         !query || searchValues.some((value) => normalized(value).includes(query));
       return (
         matchesSearch &&
-        (!selectedCategory || normalized(record.category) === selectedCategory) &&
         (!selectedTag || record.tags.some((value) => normalized(value) === selectedTag))
       );
     });
-  }, [category, records, search, tag]);
+  }, [records, search, tag]);
+
+  const addModal = useModalClose(() => {
+    addGeneration.current += 1;
+    setIsAdding(false);
+  });
 
   async function createRecord(input: VaultRecordInput) {
     const generation = addGeneration.current;
@@ -80,7 +79,7 @@ export default function PasswordVaultPage() {
       return;
     }
     setIsAddingPending(false);
-    setIsAdding(false);
+    addModal.close();
   }
 
   function openAddDialog() {
@@ -93,8 +92,7 @@ export default function PasswordVaultPage() {
     if (isAddingPending) {
       return;
     }
-    addGeneration.current += 1;
-    setIsAdding(false);
+    addModal.close();
   }
 
   return (
@@ -126,20 +124,6 @@ export default function PasswordVaultPage() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-        </label>
-        <label>
-          <span>Category</span>
-          <select
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-          >
-            <option value="">All categories</option>
-            {categories.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
         </label>
         <label>
           <span>Tag</span>
@@ -186,12 +170,11 @@ export default function PasswordVaultPage() {
         <section className="vault-record-grid" aria-label="Credentials">
           {filteredRecords.map((record) => (
             <button
-              className="vault-record-card"
+              className="vault-record-card keynest-button"
               key={record.id}
               type="button"
               onClick={() => setSelectedRecordId(record.id)}
             >
-              <span className="vault-record-category">{record.category}</span>
               <strong>{record.name}</strong>
               <span>{record.username}</span>
               {record.website ? <span>{record.website}</span> : null}
@@ -206,6 +189,8 @@ export default function PasswordVaultPage() {
       {isAdding ? (
         <VaultModal
           titleId="add-credential-title"
+          closing={addModal.closing}
+          onExitComplete={addModal.finishClose}
           onRequestClose={closeAddDialog}
           isDismissDisabled={isAddingPending}
           initialFocusRef={addNameRef}
@@ -213,18 +198,9 @@ export default function PasswordVaultPage() {
         >
           <div className="vault-dialog-title">
             <div>
-              <p className="eyebrow">PASSWORD VAULT</p>
               <h2 id="add-credential-title">Add credential</h2>
             </div>
-            <button
-              className="vault-close-button"
-              type="button"
-              onClick={closeAddDialog}
-              disabled={isAddingPending}
-              aria-label="Close credential"
-            >
-              ×
-            </button>
+            <ModalCloseButton label="Close credential" onClick={closeAddDialog} disabled={isAddingPending || addModal.closing} />
           </div>
           <VaultRecordForm
             onSubmit={createRecord}
@@ -236,6 +212,7 @@ export default function PasswordVaultPage() {
       ) : null}
       {selectedRecordId ? (
         <VaultRecordDialog
+          key={selectedRecordId}
           recordId={selectedRecordId}
           onClose={() => setSelectedRecordId(null)}
           onChanged={loadRecords}

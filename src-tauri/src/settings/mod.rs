@@ -45,12 +45,34 @@ mod tests {
         let values = SettingsValues {
             auto_lock_seconds: 900,
             clipboard_clear_seconds: 60,
+            lock_on_sleep: false,
             theme: ThemePreference::Light,
         };
 
         store.replace(values).unwrap();
 
         assert_eq!(store.load().unwrap(), SettingsLoad::Valid(values));
+    }
+
+    #[test]
+    fn older_settings_default_to_locking_on_sleep() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("settings.json"),
+            br#"{"format_version":1,"auto_lock_seconds":900,"clipboard_clear_seconds":60,"theme":"light"}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::new(temp.path().to_path_buf());
+
+        assert_eq!(
+            store.load().unwrap(),
+            SettingsLoad::Valid(SettingsValues {
+                auto_lock_seconds: 900,
+                clipboard_clear_seconds: 60,
+                lock_on_sleep: true,
+                theme: ThemePreference::Light,
+            })
+        );
     }
 
     #[test]

@@ -154,6 +154,7 @@ impl AutoLockService {
         self.set_timeout_at(timeout, self.supervisor.clock.now(), Some(guard))
     }
 
+    #[cfg(test)]
     pub(crate) fn lock_now(&self) -> Result<AuthStatus, LockError> {
         self.lock_now_with_optional_guard(None)
     }

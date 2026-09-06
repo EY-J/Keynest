@@ -235,7 +235,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let params = KdfParams::testing();
         let auth = AuthService::load(
-            ProfileStore::new(directory.path().to_path_buf(), params),
+            ProfileStore::new(directory.path().to_path_buf()),
             params,
             Arc::new(FixedEntropy),
         );

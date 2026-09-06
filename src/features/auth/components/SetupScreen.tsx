@@ -1,8 +1,11 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
+import { validateMasterPassword } from "../../../shared/security/masterPasswordPolicy";
+import MasterPasswordStrength from "../../../shared/components/MasterPasswordStrength";
 import { authClient } from "../authClient";
 import { AuthClientError } from "../types";
 import AuthLayout from "./AuthLayout";
 import PasswordField from "./PasswordField";
+import RecoveryKeyScreen from "./RecoveryKeyScreen";
 
 type SetupScreenProps = {
   onCreated: () => void;
@@ -13,30 +16,31 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [recoveryKey, setRecoveryKey] = useState("");
+  const submittingRef = useRef(false);
+  const policyError = validateMasterPassword(password, confirmation);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submittingRef.current) return;
     setError("");
 
-    if (Array.from(password).length < 12) {
-      setError("Use at least 12 characters.");
-      return;
-    }
-    if (password !== confirmation) {
-      setError("The passwords do not match.");
+    if (policyError) {
+      setError(policyError);
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     try {
-      const status = await authClient.createMasterPassword(password);
+      const result = await authClient.createMasterPassword(password);
       setPassword("");
       setConfirmation("");
-      if (status !== "unlocked") {
+      if (result.status !== "unlocked" || !result.recoveryKey) {
         setError("KeyNest did not unlock after creating the master password.");
         return;
       }
-      onCreated();
+      setRecoveryKey(result.recoveryKey);
     } catch (requestError) {
       setPassword("");
       setConfirmation("");
@@ -46,8 +50,28 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
           : "KeyNest could not create the master password.",
       );
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
+  }
+
+  if (recoveryKey) {
+    return (
+      <RecoveryKeyScreen
+        recoveryKey={recoveryKey}
+        onSaved={async () => {
+          const status = await authClient.completeRecoveryKeyDisplay();
+          if (status !== "unlocked") {
+            throw new AuthClientError(
+              "unexpected-status",
+              "KeyNest could not finish recovery-key setup.",
+            );
+          }
+          setRecoveryKey("");
+          onCreated();
+        }}
+      />
+    );
   }
 
   return (
@@ -57,14 +81,17 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
       description="This password unlocks your encrypted KeyNest data on this device."
     >
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
-        <PasswordField
-          label="Master password"
-          value={password}
-          onChange={setPassword}
-          autoComplete="new-password"
-          autoFocus
-          disabled={isSubmitting}
-        />
+        <div className="master-password-field-feedback">
+          <PasswordField
+            label="Master password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="new-password"
+            autoFocus
+            disabled={isSubmitting}
+          />
+          <MasterPasswordStrength password={password} />
+        </div>
         <PasswordField
           label="Confirm master password"
           value={confirmation}
@@ -75,10 +102,10 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
 
         <p className="auth-requirement">Use at least 12 characters.</p>
         <div className="auth-warning">
-          <strong>No password recovery</strong>
+          <strong>Offline Recovery Key</strong>
           <span>
-            If you forget this password, your encrypted KeyNest data cannot be
-            recovered.
+            KeyNest will create a one-time Recovery Key to save separately in
+            case you forget this password.
           </span>
         </div>
 
@@ -88,7 +115,7 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
           </p>
         ) : null}
 
-        <button className="primary-button auth-submit" disabled={isSubmitting}>
+        <button className="primary-button auth-submit" disabled={isSubmitting || !!policyError}>
           {isSubmitting ? "Creating encrypted vault…" : "Create Master Password"}
         </button>
       </form>

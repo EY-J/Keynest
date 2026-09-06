@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { Palette } from "lucide-react";
 import { useSettings } from "../SettingsProvider";
 import type { ThemePreference } from "../types";
+import SettingsRow from "./SettingsRow";
 
 const SAVE_ERROR = "KeyNest could not save this appearance preference.";
 
@@ -28,24 +30,34 @@ export default function AppearanceSettings() {
   }
 
   return (
-    <fieldset className="appearance-settings" disabled={isSaving}>
-      <legend>Theme</legend>
-      <p className="settings-help">Choose the appearance KeyNest uses on this device.</p>
-      <div className="theme-options">
-        {THEME_OPTIONS.map(({ value, label }) => (
-          <label key={value} className="theme-option">
-            <input
-              type="radio"
-              name="theme"
-              value={value}
-              checked={settings.theme === value}
-              onChange={() => void updateTheme(value)}
-            />
-            {label}
-          </label>
-        ))}
-      </div>
-      {error ? <p role="alert">{error}</p> : null}
-    </fieldset>
+    <div className="settings-row-list settings-section-body">
+      <SettingsRow
+        icon={Palette}
+        title="Theme"
+        description="Choose the appearance used on this device."
+      >
+        <fieldset className="theme-segmented" disabled={isSaving}>
+          <legend className="sr-only">Theme preference</legend>
+          {THEME_OPTIONS.map(({ value, label }) => (
+            <label
+              key={value}
+              className={settings.theme === value ? "selected" : ""}
+            >
+              <input
+                type="radio"
+                name="theme"
+                value={value}
+                checked={settings.theme === value}
+                onChange={() => void updateTheme(value)}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+        </fieldset>
+        {error ? (
+          <span className="settings-inline-error" role="alert">{error}</span>
+        ) : null}
+      </SettingsRow>
+    </div>
   );
 }

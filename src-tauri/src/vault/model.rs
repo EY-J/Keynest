@@ -8,7 +8,6 @@ const MAX_NAME_LENGTH: usize = 200;
 const MAX_USERNAME_LENGTH: usize = 500;
 const MAX_PASSWORD_LENGTH: usize = 4_096;
 const MAX_WEBSITE_LENGTH: usize = 2_048;
-const MAX_CATEGORY_LENGTH: usize = 100;
 const MAX_TAG_COUNT: usize = 20;
 const MAX_TAG_LENGTH: usize = 50;
 
@@ -19,18 +18,16 @@ pub(crate) struct VaultRecordInput {
     pub username: String,
     pub password: String,
     pub website: Option<String>,
-    pub category: String,
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VaultRecordSummary {
     pub id: String,
     pub name: String,
     pub username: String,
     pub website: Option<String>,
-    pub category: String,
     pub tags: Vec<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -44,10 +41,23 @@ pub(crate) struct VaultRecord {
     pub username: String,
     pub password: String,
     pub website: Option<String>,
-    pub category: String,
     pub tags: Vec<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+impl From<&VaultRecord> for VaultRecordSummary {
+    fn from(record: &VaultRecord) -> Self {
+        Self {
+            id: record.id.clone(),
+            name: record.name.clone(),
+            username: record.username.clone(),
+            website: record.website.clone(),
+            tags: record.tags.clone(),
+            created_at_ms: record.created_at_ms,
+            updated_at_ms: record.updated_at_ms,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -60,8 +70,6 @@ pub(crate) enum VaultError {
     InvalidPassword,
     #[error("credential website is invalid")]
     InvalidWebsite,
-    #[error("credential category is invalid")]
-    InvalidCategory,
     #[error("credential tags are invalid")]
     InvalidTags,
     #[error("credential was not found")]
@@ -102,11 +110,6 @@ impl VaultRecordInput {
             self.website = None;
         }
 
-        trim_and_replace(&mut self.category);
-        if self.category.is_empty() || character_count(&self.category) > MAX_CATEGORY_LENGTH {
-            return Err(VaultError::InvalidCategory);
-        }
-
         if self.tags.len() > MAX_TAG_COUNT {
             return Err(VaultError::InvalidTags);
         }
@@ -141,6 +144,15 @@ impl fmt::Debug for VaultRecordInput {
     }
 }
 
+impl fmt::Debug for VaultRecordSummary {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VaultRecordSummary")
+            .field("credential", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl fmt::Debug for VaultRecord {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -167,4 +179,23 @@ fn case_insensitive_eq(left: &str, right: &str) -> bool {
 
 fn character_count(value: &str) -> usize {
     value.chars().count()
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+    #[test]
+    fn decrypted_summary_debug_omits_all_user_fields() {
+        let secret = "sentinel-decrypted-metadata";
+        let summary = VaultRecordSummary {
+            id: secret.into(),
+            name: secret.into(),
+            username: secret.into(),
+            website: Some(secret.into()),
+            tags: vec![secret.into()],
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        assert!(!format!("{summary:?}").contains(secret));
+    }
 }

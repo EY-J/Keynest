@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { publicError } from "../../shared/security/publicErrors";
 import {
   VaultClientError,
   type VaultRecord,
@@ -7,9 +8,6 @@ import {
 } from "./types";
 
 type InvokeArguments = Record<string, unknown>;
-
-const UNKNOWN_VAULT_ERROR_MESSAGE =
-  "KeyNest could not complete the vault request.";
 
 async function invokeVault<T>(
   command: string,
@@ -26,26 +24,8 @@ async function invokeVault<T>(
 }
 
 function normalizeVaultError(error: unknown): VaultClientError {
-  if (isStructuredVaultError(error)) {
-    return new VaultClientError(error.code, error.message);
-  }
-
-  return new VaultClientError("unknown-error", UNKNOWN_VAULT_ERROR_MESSAGE);
-}
-
-function isStructuredVaultError(
-  value: unknown,
-): value is { code: string; message: string } {
-  return (
-    isRecord(value) &&
-    !(value instanceof Error) &&
-    typeof value.code === "string" &&
-    typeof value.message === "string"
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  const { code, message } = publicError(error);
+  return new VaultClientError(code, message);
 }
 
 export const vaultClient = {
@@ -55,6 +35,8 @@ export const vaultClient = {
     invokeVault<VaultRecordSummary>("create_vault_record", { input }),
   getVaultRecord: (id: string) =>
     invokeVault<VaultRecord>("get_vault_record", { id }),
+  getVaultRecordSummary: (id: string) =>
+    invokeVault<VaultRecordSummary>("get_vault_record_summary", { id }),
   updateVaultRecord: (id: string, input: VaultRecordInput) =>
     invokeVault<VaultRecordSummary>("update_vault_record", { id, input }),
   deleteVaultRecord: (id: string) =>
