@@ -63,7 +63,7 @@ export function ModalCloseButton({ onClick, disabled, label = "Close", buttonRef
   onClick: () => void; disabled?: boolean; label?: string; buttonRef?: RefObject<HTMLButtonElement | null>; className?: string;
 }) {
   return <button ref={buttonRef} className={`keynest-modal__close ${className}`.trim()} type="button" aria-label={label} disabled={disabled} onClick={onClick}>
-    <X size={18} aria-hidden="true" />
+    <X size={20} strokeWidth={2.5} aria-hidden="true" />
   </button>;
 }
 

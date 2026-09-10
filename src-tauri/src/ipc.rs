@@ -11,6 +11,10 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{
+    autofill::{
+        AutofillService, HostApprovalCandidate, HostApprovalCompleted, HostApprovalError,
+        PendingHostApprovalView,
+    },
     platform::startup::{StartupError, StartupService},
     security::{
         AuthError, AuthService, AuthStatus, AutoLockService, ClipboardError, ClipboardService,
@@ -92,11 +96,35 @@ impl PublicIpcError {
         )
     }
 
+    fn username_clipboard_copy() -> Self {
+        Self::new(
+            "clipboard-copy-error",
+            "KeyNest could not copy this username.",
+        )
+    }
+
     fn recovery_clipboard_copy() -> Self {
         Self::new(
             "clipboard-copy-error",
             "KeyNest could not copy the Recovery Key.",
         )
+    }
+}
+
+impl From<HostApprovalError> for PublicIpcError {
+    fn from(error: HostApprovalError) -> Self {
+        match error {
+            HostApprovalError::Locked => Self::new("unauthorized", "KeyNest is locked."),
+            HostApprovalError::Unavailable => Self::new(
+                "host-approval-unavailable",
+                "This login-host approval request is no longer available.",
+            ),
+            HostApprovalError::CredentialNotFound => Self::new(
+                "vault-record-not-found",
+                "This credential no longer exists.",
+            ),
+            HostApprovalError::Internal => Self::internal(),
+        }
     }
 }
 
@@ -202,6 +230,10 @@ impl From<VaultError> for PublicIpcError {
             VaultError::InvalidWebsite => {
                 Self::new("invalid-vault-website", "Enter a valid credential website.")
             }
+            VaultError::InvalidAllowedLoginHosts => Self::new(
+                "invalid-vault-login-hosts",
+                "Enter valid login hostnames without paths or wildcards.",
+            ),
             VaultError::InvalidTags => {
                 Self::new("invalid-vault-tags", "Check the credential tags.")
             }
@@ -673,6 +705,24 @@ fn copy_vault_password_value(
     clipboard
         .copy_secret(&password)
         .map_err(|_| PublicIpcError::clipboard_copy())?;
+    Ok(())
+}
+
+fn copy_vault_username_value(
+    id: &str,
+    auth: &AuthService,
+    vault: &VaultService,
+    clipboard: &ClipboardService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
+    let record = auth
+        .require_vault_key(|vault_key| vault.get(vault_key, id))
+        .map_err(PublicIpcError::from)?
+        .map_err(PublicIpcError::from)?;
+    clipboard
+        .copy_secret(&record.username)
+        .map_err(|_| PublicIpcError::username_clipboard_copy())?;
     Ok(())
 }
 
@@ -1314,6 +1364,75 @@ pub(crate) async fn copy_vault_password(
     .map_err(|_| PublicIpcError::internal())?
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn copy_vault_username(
+    id: String,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    clipboard: State<'_, ClipboardService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let clipboard = clipboard.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        copy_vault_username_value(&id, &auth, &vault, &clipboard, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn get_pending_host_approval(
+    autofill: State<'_, AutofillService>,
+) -> Result<Option<PendingHostApprovalView>, PublicIpcError> {
+    let autofill = autofill.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || autofill.pending_host_approval())
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+        .map_err(PublicIpcError::from)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn list_host_approval_candidates(
+    approval_id: String,
+    autofill: State<'_, AutofillService>,
+) -> Result<Vec<HostApprovalCandidate>, PublicIpcError> {
+    let autofill = autofill.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || autofill.host_approval_candidates(&approval_id))
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+        .map_err(PublicIpcError::from)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn approve_login_host(
+    approval_id: String,
+    credential_id: String,
+    autofill: State<'_, AutofillService>,
+) -> Result<HostApprovalCompleted, PublicIpcError> {
+    let autofill = autofill.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        autofill.approve_login_host(&approval_id, &credential_id)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+    .map_err(PublicIpcError::from)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn cancel_host_approval(
+    approval_id: String,
+    autofill: State<'_, AutofillService>,
+) -> Result<(), PublicIpcError> {
+    let autofill = autofill.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || autofill.cancel_host_approval(&approval_id))
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+        .map_err(PublicIpcError::from)
+}
+
 #[cfg(test)]
 mod command_tests {
     use std::{
@@ -1548,6 +1667,7 @@ mod command_tests {
             username: "alex@example.test".to_owned(),
             password: password.to_owned(),
             website: Some("https://example.test".to_owned()),
+            allowed_login_hosts: vec![],
             tags: vec!["Important".to_owned()],
         }
     }
@@ -1610,6 +1730,13 @@ mod command_tests {
                 &fixture.operation_gate,
             ),
             copy_vault_password_value(
+                "missing",
+                &fixture.auth,
+                &fixture.vault,
+                &fixture.clipboard,
+                &fixture.operation_gate,
+            ),
+            copy_vault_username_value(
                 "missing",
                 &fixture.auth,
                 &fixture.vault,
@@ -1741,6 +1868,18 @@ mod command_tests {
             *fixture.clipboard_port.value.lock().unwrap(),
             "second selected password"
         );
+        copy_vault_username_value(
+            &second.id,
+            &fixture.auth,
+            &fixture.vault,
+            &fixture.clipboard,
+            &fixture.operation_gate,
+        )
+        .unwrap();
+        assert_eq!(
+            *fixture.clipboard_port.value.lock().unwrap(),
+            "alex@example.test"
+        );
         delete_vault_record_value(
             &first.id,
             &fixture.auth,
@@ -1817,6 +1956,11 @@ mod command_tests {
                 VaultError::InvalidWebsite,
                 "invalid-vault-website",
                 "Enter a valid credential website.",
+            ),
+            (
+                VaultError::InvalidAllowedLoginHosts,
+                "invalid-vault-login-hosts",
+                "Enter valid login hostnames without paths or wildcards.",
             ),
             (
                 VaultError::InvalidTags,
@@ -2002,7 +2146,14 @@ mod command_tests {
         let profile_path = fixture.temp.path().join("profile.json");
         let before_profile = std::fs::read(&profile_path).unwrap();
         let before_key = fixture.auth.require_vault_key(|key| *key).unwrap();
-        for weak in ["123456789012", "password1234", "111111111111"] {
+        for weak in [
+            "123456789012",
+            "password1234",
+            "111111111111",
+            "aaaaaaaaaaaa",
+            "abcdefghijkl",
+            "abababababab",
+        ] {
             let error = change_master_password_value(
                 PASSWORD,
                 weak,
@@ -2024,7 +2175,7 @@ mod command_tests {
 
     #[test]
     fn direct_password_change_accepts_good_and_strong_passwords() {
-        for replacement in ["aaaaaaaaaaaa", "V7!qR2@tL9#z"] {
+        for replacement in ["kqmwzptxvbnr", "V7!qR2@tL9#z"] {
             let fixture = CommandFixture::new();
             fixture.create_unlocked_profile();
             let before_key = fixture.auth.require_vault_key(|key| *key).unwrap();

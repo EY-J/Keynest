@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
 import { useSettings } from "../../features/settings/SettingsProvider";
+import HostApprovalModal from "../../features/autofill/HostApprovalModal";
+import {
+  loadFavoriteRecordIds,
+  saveFavoriteRecordIds,
+  toggledFavoriteRecordIds,
+} from "../../features/vault/favoriteStore";
 import HomePage from "../../pages/HomePage";
 import PasswordVaultPage from "../../pages/PasswordVaultPage";
 import SettingsPage from "../../pages/SettingsPage";
 import AppTitleBar from "./AppTitleBar";
 import NavigationSidebar from "./NavigationSidebar";
 
-export type AuthenticatedDestination = "home" | "vault" | "settings";
+export type AuthenticatedDestination = "home" | "vault" | "favorites" | "settings";
 
 type AuthenticatedShellProps = {
   onLockKeynest: () => Promise<void>;
@@ -23,7 +29,14 @@ export default function AuthenticatedShell({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeDestination, setActiveDestination] =
     useState<AuthenticatedDestination>("home");
+  const [favoriteRecordIds, setFavoriteRecordIds] = useState<Set<string>>(
+    loadFavoriteRecordIds,
+  );
   const { settings } = useSettings();
+
+  useEffect(() => {
+    saveFavoriteRecordIds(favoriteRecordIds);
+  }, [favoriteRecordIds]);
 
   useEffect(() => {
     if (!isSidebarOpen) {
@@ -43,6 +56,10 @@ export default function AuthenticatedShell({
   function navigate(destination: AuthenticatedDestination) {
     setActiveDestination(destination);
     setIsSidebarOpen(false);
+  }
+
+  function toggleFavorite(recordId: string) {
+    setFavoriteRecordIds((current) => toggledFavoriteRecordIds(current, recordId));
   }
 
   return (
@@ -76,11 +93,16 @@ export default function AuthenticatedShell({
 
       {activeDestination === "home" ? (
         <HomePage onNavigateToVault={() => navigate("vault")} />
-      ) : activeDestination === "vault" ? (
-        <PasswordVaultPage />
+      ) : activeDestination === "vault" || activeDestination === "favorites" ? (
+        <PasswordVaultPage
+          favoriteRecordIds={favoriteRecordIds}
+          favoritesOnly={activeDestination === "favorites"}
+          onToggleFavorite={toggleFavorite}
+        />
       ) : (
         <SettingsPage onResetAuthenticated={onResetAuthenticated} />
       )}
+      <HostApprovalModal />
     </div>
   );
 }

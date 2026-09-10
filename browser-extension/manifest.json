@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "KeyNest Autofill",
+  "version": "0.1.0",
+  "minimum_chrome_version": "106",
+  "description": "Manually fill saved logins from your local KeyNest desktop vault.",
+  "icons": {
+    "16": "icons/keynest-16.png",
+    "32": "icons/keynest-32.png",
+    "48": "icons/keynest-48.png",
+    "128": "icons/keynest-128.png"
+  },
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "background": { "service_worker": "src/service-worker.js", "type": "module" },
+  "action": {
+    "default_title": "KeyNest Autofill",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/keynest-16.png",
+      "32": "icons/keynest-32.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none';"
+  }
+}

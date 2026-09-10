@@ -1,3 +1,4 @@
+mod autofill;
 mod diagnostics;
 mod ipc;
 mod platform;
@@ -8,6 +9,7 @@ pub(crate) mod vault;
 
 use std::{sync::Arc, time::Duration};
 
+use autofill::TauriHostApprovalEventSink;
 use ipc::DataFolderService;
 use platform::startup::{
     minimize_for_launch, StartupService, TauriMainWindowMinimizer, TauriStartupRegistration,
@@ -20,6 +22,20 @@ use settings::{SettingsService, SettingsStore};
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 use vault::VaultService;
+
+pub use autofill::run_native_host;
+pub use autofill::AutofillService;
+#[cfg(windows)]
+pub use platform::autofill_pipe::{forward_autofill_request, PipeError};
+
+fn shutdown_autofill(app: &tauri::AppHandle) {
+    #[cfg(windows)]
+    if let Some(server) = app.try_state::<platform::autofill_pipe::PipeServer>() {
+        server.shutdown();
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
 
 fn resume_lock(
     auto_lock: &AutoLockService,
@@ -77,7 +93,14 @@ pub fn run() {
             let store = ProfileStore::new(app_data_dir.clone());
             let auth = AuthService::load(store, kdf_params, Arc::new(OsEntropy));
             app.manage(auth.clone());
-            app.manage(VaultService::new(app_data_dir, Arc::new(OsEntropy)));
+            let vault = VaultService::new(app_data_dir, Arc::new(OsEntropy));
+            app.manage(vault.clone());
+            app.manage(
+                AutofillService::new(auth.clone(), vault, operation_gate.clone())
+                    .with_host_approval_events(Arc::new(TauriHostApprovalEventSink::new(
+                        app.handle().clone(),
+                    ))),
+            );
 
             let clipboard = ClipboardService::new(
                 Arc::new(TauriClipboardPort::new(app.handle().clone())),
@@ -109,6 +132,13 @@ pub fn run() {
                         let _ = auto_lock.lock_now_with_operation_guard(&guard);
                     }
                 })?);
+                // Fail closed for Autofill without making vault/lock availability
+                // depend on pipe registration (e.g. another desktop instance).
+                if let Ok(server) = platform::autofill_pipe::PipeServer::start(
+                    app.state::<AutofillService>().inner().clone(),
+                ) {
+                    app.manage(server);
+                }
             }
             Ok(())
         })
@@ -139,7 +169,12 @@ pub fn run() {
             ipc::get_vault_record_summary,
             ipc::update_vault_record,
             ipc::delete_vault_record,
-            ipc::copy_vault_password
+            ipc::copy_vault_password,
+            ipc::copy_vault_username,
+            ipc::get_pending_host_approval,
+            ipc::list_host_approval_candidates,
+            ipc::approve_login_host,
+            ipc::cancel_host_approval
         ])
         .build(context)
         .expect("error while building tauri application")
@@ -152,6 +187,7 @@ pub fn run() {
                 );
             }
             tauri::RunEvent::ExitRequested { api, code, .. } => {
+                shutdown_autofill(app);
                 shutdown_auto_lock(app.state::<AutoLockService>().inner());
                 let clipboard = app.state::<ClipboardService>();
                 if clipboard.begin_process_exit_cleanup() {
@@ -163,6 +199,7 @@ pub fn run() {
                 }
             }
             tauri::RunEvent::Exit => {
+                shutdown_autofill(app);
                 shutdown_auto_lock(app.state::<AutoLockService>().inner());
             }
             _ => {}

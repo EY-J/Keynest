@@ -8,7 +8,7 @@ export type MasterPasswordStrength = "Weak" | "Good" | "Strong";
 export function masterPasswordStrength(password: string): MasterPasswordStrength {
   if (Array.from(password).length < 12) return "Weak";
   const { score } = analyzePassword(password);
-  return score < 2 ? "Weak" : score === 2 ? "Good" : "Strong";
+  return score < 3 ? "Weak" : score === 3 ? "Good" : "Strong";
 }
 
 export function validateMasterPassword(password: string, confirmation: string): string | null {

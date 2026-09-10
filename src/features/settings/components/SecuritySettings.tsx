@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { Clipboard, Lock, Monitor, Trash2 } from "lucide-react";
+import KeyNestSelect from "../../../shared/components/KeyNestSelect";
 import { useSettings } from "../SettingsProvider";
 import type { AutoLockSeconds, ClipboardClearSeconds } from "../types";
 import AuthenticatedResetDialog from "./AuthenticatedResetDialog";
@@ -88,19 +89,21 @@ export default function SecuritySettings({
             <label className="sr-only" htmlFor="auto-lock-seconds">
               Auto Lock duration
             </label>
-            <select
+            <KeyNestSelect
               id="auto-lock-seconds"
-              value={settings.autoLockSeconds}
+              value={String(settings.autoLockSeconds)}
+              ariaLabel="Auto Lock duration"
               disabled={isSaving["auto-lock"]}
-              onChange={(event) =>
-                void saveAutoLock(Number(event.target.value) as AutoLockSeconds)
+              onChange={(value) =>
+                void saveAutoLock(Number(value) as AutoLockSeconds)
               }
-            >
-              <option value="60">1 minute</option>
-              <option value="300">5 minutes</option>
-              <option value="900">15 minutes</option>
-              <option value="1800">30 minutes</option>
-            </select>
+              options={[
+                { value: "60", label: "1 minute" },
+                { value: "300", label: "5 minutes" },
+                { value: "900", label: "15 minutes" },
+                { value: "1800", label: "30 minutes" },
+              ]}
+            />
             {errors["auto-lock"] ? (
               <span className="settings-inline-error" role="alert">
                 {errors["auto-lock"]}
@@ -117,20 +120,22 @@ export default function SecuritySettings({
             <label className="sr-only" htmlFor="clipboard-clear-seconds">
               Clipboard clearing delay
             </label>
-            <select
+            <KeyNestSelect
               id="clipboard-clear-seconds"
-              value={settings.clipboardClearSeconds}
+              value={String(settings.clipboardClearSeconds)}
+              ariaLabel="Clipboard clearing delay"
               disabled={isSaving.clipboard}
-              onChange={(event) =>
+              onChange={(value) =>
                 void saveClipboardClear(
-                  Number(event.target.value) as ClipboardClearSeconds,
+                  Number(value) as ClipboardClearSeconds,
                 )
               }
-            >
-              <option value="10">10 seconds</option>
-              <option value="30">30 seconds</option>
-              <option value="60">60 seconds</option>
-            </select>
+              options={[
+                { value: "10", label: "10 seconds" },
+                { value: "30", label: "30 seconds" },
+                { value: "60", label: "60 seconds" },
+              ]}
+            />
             {errors.clipboard ? (
               <span className="settings-inline-error" role="alert">
                 {errors.clipboard}

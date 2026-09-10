@@ -66,6 +66,7 @@ mod tests {
             username: "alex@example.test".to_owned(),
             password: "correct horse battery staple".to_owned(),
             website: Some("https://example.test".to_owned()),
+            allowed_login_hosts: vec![],
             tags: vec!["Important".to_owned()],
         }
     }
@@ -163,6 +164,7 @@ mod tests {
             username: "debug-secret-username".to_owned(),
             password: "debug-secret-password".to_owned(),
             website: Some("debug-secret-website".to_owned()),
+            allowed_login_hosts: vec!["debug-secret-login-host".to_owned()],
             tags: vec!["debug-secret-tag".to_owned()],
         };
         let input_debug = format!("{secret_input:?}");
@@ -283,6 +285,36 @@ mod tests {
                 VaultError::InvalidWebsite,
             ),
             (
+                "21 allowed login hosts",
+                input_with!(allowed_login_hosts: (0..21).map(|index| format!("login-{index}.example.test")).collect()),
+                VaultError::InvalidAllowedLoginHosts,
+            ),
+            (
+                "wildcard login host",
+                input_with!(allowed_login_hosts: vec!["*.example.test".into()]),
+                VaultError::InvalidAllowedLoginHosts,
+            ),
+            (
+                "URL used as login host",
+                input_with!(allowed_login_hosts: vec!["https://login.example.test".into()]),
+                VaultError::InvalidAllowedLoginHosts,
+            ),
+            (
+                "path used as login host",
+                input_with!(allowed_login_hosts: vec!["login.example.test/path".into()]),
+                VaultError::InvalidAllowedLoginHosts,
+            ),
+            (
+                "port used as login host",
+                input_with!(allowed_login_hosts: vec!["login.example.test:443".into()]),
+                VaultError::InvalidAllowedLoginHosts,
+            ),
+            (
+                "empty login host",
+                input_with!(allowed_login_hosts: vec!["   ".into()]),
+                VaultError::InvalidAllowedLoginHosts,
+            ),
+            (
                 "21 tags",
                 input_with!(tags: (0..21).map(|tag| format!("tag-{tag}")).collect()),
                 VaultError::InvalidTags,
@@ -328,6 +360,31 @@ mod tests {
         let loaded = service.get(&key, &record.id).unwrap();
 
         assert_eq!(loaded.tags, ["Work", "Personal"]);
+    }
+
+    #[test]
+    fn allowed_login_hosts_are_canonicalized_and_deduplicated() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = service(temp.path().to_path_buf());
+        let key = vault_key();
+        let record = service
+            .create(
+                &key,
+                input_with!(allowed_login_hosts: vec![
+                    " ACCOUNTS.GOOGLE.COM. ".into(),
+                    "accounts.google.com".into(),
+                    "LOGIN.MICROSOFTONLINE.COM".into(),
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            record.allowed_login_hosts,
+            ["accounts.google.com", "login.microsoftonline.com"]
+        );
+        assert_eq!(
+            service.get(&key, &record.id).unwrap().allowed_login_hosts,
+            ["accounts.google.com", "login.microsoftonline.com"]
+        );
     }
 
     #[test]
@@ -411,6 +468,7 @@ mod tests {
                     username: "literal-vault-username".to_owned(),
                     password: "literal-vault-password".to_owned(),
                     website: Some("literal-vault-website".to_owned()),
+                    allowed_login_hosts: vec![],
                     tags: vec!["literal-vault-tag".to_owned()],
                 },
             )

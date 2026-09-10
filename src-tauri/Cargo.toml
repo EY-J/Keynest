@@ -3,6 +3,11 @@ name = "keynest"
 version = "0.1.0"
 description = "A local-first encrypted password vault"
 edition = "2021"
+default-run = "keynest"
+
+[[bin]]
+name = "keynest-native-host"
+path = "src/bin/keynest_native_host.rs"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -18,7 +23,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 argon2 = { version = "0.5", features = ["zeroize"] }
 base64 = "0.22"
 chacha20poly1305 = "0.10"
@@ -32,4 +37,4 @@ tauri-plugin-autostart = "2"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_RemoteDesktop", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_RemoteDesktop", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading"] }

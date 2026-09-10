@@ -25,11 +25,13 @@ const messages: Record<string, string> = {
   "invalid-vault-username": "Enter a credential username.",
   "invalid-vault-password": "Enter a credential password.",
   "invalid-vault-website": "Enter a valid credential website.",
+  "invalid-vault-login-hosts": "Enter valid login hostnames without paths or wildcards.",
   "invalid-vault-tags": "Check the credential tags.",
   "vault-record-not-found": "The credential was not found.",
   "vault-data-error": "KeyNest could not verify your vault data.",
   "vault-entropy-error": "KeyNest could not generate secure vault data.",
   "vault-storage-error": "KeyNest could not access its encrypted vault data.",
+  "host-approval-unavailable": "This login-host approval request is no longer available.",
 };
 
 export function publicError(error: unknown) {

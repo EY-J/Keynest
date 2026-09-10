@@ -1,6 +1,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use tauri::Url;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -8,6 +9,8 @@ const MAX_NAME_LENGTH: usize = 200;
 const MAX_USERNAME_LENGTH: usize = 500;
 const MAX_PASSWORD_LENGTH: usize = 4_096;
 const MAX_WEBSITE_LENGTH: usize = 2_048;
+const MAX_ALLOWED_LOGIN_HOST_COUNT: usize = 20;
+const MAX_ALLOWED_LOGIN_HOST_LENGTH: usize = 253;
 const MAX_TAG_COUNT: usize = 20;
 const MAX_TAG_LENGTH: usize = 50;
 
@@ -18,6 +21,8 @@ pub(crate) struct VaultRecordInput {
     pub username: String,
     pub password: String,
     pub website: Option<String>,
+    #[serde(default)]
+    pub allowed_login_hosts: Vec<String>,
     pub tags: Vec<String>,
 }
 
@@ -28,6 +33,7 @@ pub(crate) struct VaultRecordSummary {
     pub name: String,
     pub username: String,
     pub website: Option<String>,
+    pub allowed_login_hosts: Vec<String>,
     pub tags: Vec<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -41,6 +47,7 @@ pub(crate) struct VaultRecord {
     pub username: String,
     pub password: String,
     pub website: Option<String>,
+    pub allowed_login_hosts: Vec<String>,
     pub tags: Vec<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -53,6 +60,7 @@ impl From<&VaultRecord> for VaultRecordSummary {
             name: record.name.clone(),
             username: record.username.clone(),
             website: record.website.clone(),
+            allowed_login_hosts: record.allowed_login_hosts.clone(),
             tags: record.tags.clone(),
             created_at_ms: record.created_at_ms,
             updated_at_ms: record.updated_at_ms,
@@ -70,6 +78,8 @@ pub(crate) enum VaultError {
     InvalidPassword,
     #[error("credential website is invalid")]
     InvalidWebsite,
+    #[error("credential allowed login hosts are invalid")]
+    InvalidAllowedLoginHosts,
     #[error("credential tags are invalid")]
     InvalidTags,
     #[error("credential was not found")]
@@ -109,6 +119,18 @@ impl VaultRecordInput {
             self.website.zeroize();
             self.website = None;
         }
+
+        if self.allowed_login_hosts.len() > MAX_ALLOWED_LOGIN_HOST_COUNT {
+            return Err(VaultError::InvalidAllowedLoginHosts);
+        }
+        let mut allowed_login_hosts = Vec::with_capacity(self.allowed_login_hosts.len());
+        for host in self.allowed_login_hosts.drain(..) {
+            let host = canonical_login_host(&host)?;
+            if !allowed_login_hosts.iter().any(|existing| existing == &host) {
+                allowed_login_hosts.push(host);
+            }
+        }
+        self.allowed_login_hosts = allowed_login_hosts;
 
         if self.tags.len() > MAX_TAG_COUNT {
             return Err(VaultError::InvalidTags);
@@ -181,6 +203,30 @@ fn character_count(value: &str) -> usize {
     value.chars().count()
 }
 
+fn canonical_login_host(value: &str) -> Result<String, VaultError> {
+    let value = value.trim();
+    if value.is_empty()
+        || character_count(value) > MAX_ALLOWED_LOGIN_HOST_LENGTH
+        || value.contains(['*', '/', '\\', ':', '?', '#', '@', '[', ']'])
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(VaultError::InvalidAllowedLoginHosts);
+    }
+    let url = Url::parse(&format!("https://{value}/"))
+        .map_err(|_| VaultError::InvalidAllowedLoginHosts)?;
+    let host = url.host_str().ok_or(VaultError::InvalidAllowedLoginHosts)?;
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    if host.is_empty()
+        || host.len() > MAX_ALLOWED_LOGIN_HOST_LENGTH
+        || host.split('.').any(str::is_empty)
+    {
+        return Err(VaultError::InvalidAllowedLoginHosts);
+    }
+    Ok(host)
+}
+
 #[cfg(test)]
 mod logging_tests {
     use super::*;
@@ -192,6 +238,7 @@ mod logging_tests {
             name: secret.into(),
             username: secret.into(),
             website: Some(secret.into()),
+            allowed_login_hosts: vec![secret.into()],
             tags: vec![secret.into()],
             created_at_ms: 0,
             updated_at_ms: 0,

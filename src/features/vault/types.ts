@@ -3,6 +3,7 @@ export type VaultRecordInput = {
   username: string;
   password: string;
   website: string | null;
+  allowedLoginHosts: string[];
   tags: string[];
 };
 
@@ -11,6 +12,7 @@ export type VaultRecordSummary = {
   name: string;
   username: string;
   website: string | null;
+  allowedLoginHosts: string[];
   tags: string[];
   createdAtMs: number;
   updatedAtMs: number;
@@ -22,6 +24,7 @@ export type VaultRecord = {
   username: string;
   password: string;
   website: string | null;
+  allowedLoginHosts: string[];
   tags: string[];
   createdAtMs: number;
   updatedAtMs: number;

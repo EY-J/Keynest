@@ -1,7 +1,7 @@
 import { type FormEvent, type RefObject, useEffect, useRef, useState } from "react";
+import MasterPasswordStrength from "../../../shared/components/MasterPasswordStrength";
 import type { VaultRecord, VaultRecordInput } from "../types";
 import { generateAdvancedPassword } from "./PasswordGenerator";
-import PasswordStrengthMeter from "./PasswordStrengthMeter";
 
 type VaultRecordFormProps = {
   initialRecord?: VaultRecord;
@@ -118,6 +118,9 @@ export default function VaultRecordForm({
   const [username, setUsername] = useState(initialRecord?.username ?? "");
   const [password, setPassword] = useState(initialRecord?.password ?? "");
   const [website, setWebsite] = useState(initialRecord?.website ?? "");
+  const [preservedAllowedLoginHosts] = useState(
+    () => [...(initialRecord?.allowedLoginHosts ?? [])],
+  );
   const [tags, setTags] = useState(initialRecord?.tags.join(", ") ?? "");
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<RequiredField, string>>>({});
   const [formError, setFormError] = useState("");
@@ -170,6 +173,9 @@ export default function VaultRecordForm({
         username: username.trim(),
         password,
         website: website.trim() || null,
+        // Alternate hosts are intentionally hidden from the normal form. Keep
+        // existing approvals byte-for-byte; new credentials start with none.
+        allowedLoginHosts: [...preservedAllowedLoginHosts],
         tags: normalizeTags(tags),
       });
     } catch {
@@ -195,7 +201,8 @@ export default function VaultRecordForm({
 
   return (
     <form className="vault-record-form" onSubmit={(event) => void submit(event)}>
-      <div className="vault-form-field">
+      <div className="vault-record-form-body">
+        <div className="vault-form-field">
         <label htmlFor="vault-name">Name</label>
         <input
           id="vault-name"
@@ -212,8 +219,8 @@ export default function VaultRecordForm({
             {fieldErrors.name}
           </span>
         ) : null}
-      </div>
-      <div className="vault-form-field">
+        </div>
+        <div className="vault-form-field">
         <label htmlFor="vault-username">Username or email</label>
         <input
           id="vault-username"
@@ -232,10 +239,10 @@ export default function VaultRecordForm({
             {fieldErrors.username}
           </span>
         ) : null}
-      </div>
+        </div>
 
       {/* ── Password field ────────────────────────────────────────────────── */}
-      <div className="vault-form-field">
+        <div className="vault-form-field vault-form-password">
         <label htmlFor="vault-password">Password</label>
         <div className="vault-password-input-row">
           <input
@@ -280,11 +287,11 @@ export default function VaultRecordForm({
           </span>
         ) : null}
 
-        {/* Strength meter — always visible when password is non-empty */}
-        {password && <PasswordStrengthMeter password={password} />}
-      </div>
+        {/* Informational only: weak saved credentials are still allowed. */}
+        {password && <MasterPasswordStrength password={password} />}
+        </div>
 
-      <label>
+        <label className="vault-form-website">
         <span>Website (optional)</span>
         <input
           type="text"
@@ -294,8 +301,8 @@ export default function VaultRecordForm({
           onChange={(event) => setWebsite(event.target.value)}
           disabled={isSubmitting}
         />
-      </label>
-      <label>
+        </label>
+        <label className="vault-form-tags">
         <span>Tags (comma-separated)</span>
         <input
           placeholder="e.g. work, personal"
@@ -303,12 +310,13 @@ export default function VaultRecordForm({
           onChange={(event) => setTags(event.target.value)}
           disabled={isSubmitting}
         />
-      </label>
-      {formError ? (
-        <div className="vault-form-error" aria-live="assertive">
-          <p>{formError}</p>
-        </div>
-      ) : null}
+        </label>
+        {formError ? (
+          <div className="vault-form-error" aria-live="assertive">
+            <p>{formError}</p>
+          </div>
+        ) : null}
+      </div>
       <div className="vault-dialog-actions">
         <button
           className="secondary-button"
@@ -319,7 +327,7 @@ export default function VaultRecordForm({
           Cancel
         </button>
         <button className="primary-button" disabled={isSubmitting}>
-          {isSubmitting ? "Saving…" : "Save Credential"}
+          {isSubmitting ? "Saving…" : "Save"}
         </button>
       </div>
     </form>

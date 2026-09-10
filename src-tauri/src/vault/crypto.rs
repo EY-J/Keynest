@@ -19,6 +19,8 @@ struct CredentialPayload {
     username: String,
     password: String,
     website: Option<String>,
+    #[serde(default)]
+    allowed_login_hosts: Vec<String>,
     tags: Vec<String>,
 }
 
@@ -29,6 +31,7 @@ impl From<&VaultRecordInput> for CredentialPayload {
             username: input.username.clone(),
             password: input.password.clone(),
             website: input.website.clone(),
+            allowed_login_hosts: input.allowed_login_hosts.clone(),
             tags: input.tags.clone(),
         }
     }
@@ -41,6 +44,7 @@ impl CredentialPayload {
             username: self.username.clone(),
             password: self.password.clone(),
             website: self.website.clone(),
+            allowed_login_hosts: self.allowed_login_hosts.clone(),
             tags: self.tags.clone(),
         }
     }
@@ -132,14 +136,20 @@ mod tests {
         let id = "legacy-record";
         let plaintext = br#"{"name":"Example","username":"user","password":"secret","website":null,"category":"Personal","tags":["work"]}"#;
         let cipher = XChaCha20Poly1305::new_from_slice(&key).unwrap();
-        let ciphertext = cipher.encrypt(
-            XNonce::from_slice(&nonce),
-            Payload { msg: plaintext, aad: &associated_data(id) },
-        ).unwrap();
+        let ciphertext = cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &associated_data(id),
+                },
+            )
+            .unwrap();
         let input = decrypt(FORMAT_VERSION, &nonce, &ciphertext, &key, id).unwrap();
         assert_eq!(input.name, "Example");
         assert_eq!(input.password, "secret");
         assert_eq!(input.tags, vec!["work"]);
+        assert!(input.allowed_login_hosts.is_empty());
         let serialized = serde_json::to_value(CredentialPayload::from(&input)).unwrap();
         assert!(serialized.get("category").is_none());
     }

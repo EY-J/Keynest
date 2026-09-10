@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KeyNest Autofill</title>
+    <link rel="stylesheet" href="popup.css">
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <header><img class="brand-mark" src="../icons/keynest-128.png" alt="" aria-hidden="true" draggable="false"><div><h1>KeyNest Autofill</h1><p class="eyebrow">Your local vault</p></div></header>
+    <main id="content" aria-busy="true">
+      <div id="host-group">
+      <p id="status" role="status" aria-live="polite">Checking KeyNest…</p>
+      <p id="host" dir="ltr" hidden>
+        <svg class="host-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M12 2a15.3 15.3 0 0 1 0 20"></path>
+          <path d="M12 2a15.3 15.3 0 0 0 0 20"></path>
+          <path d="M2 12h20"></path>
+        </svg>
+        <span id="host-value"></span>
+      </p>
+      </div>
+      <ul id="matches" aria-label="Matching accounts"></ul>
+      <p id="hint"></p>
+      <button id="review" class="review" type="button" hidden>Review in KeyNest</button>
+    </main>
+    <footer>
+      <button id="retry" type="button" title="Retry" aria-label="Retry" disabled>
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"></path>
+          <path d="M3 21v-5h5"></path>
+          <path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"></path>
+          <path d="M21 3v5h-5"></path>
+        </svg>
+      </button>
+      <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Local only</span>
+    </footer>
+  </body>
+</html>

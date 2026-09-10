@@ -4,6 +4,7 @@ import AuthGate from "../features/auth/components/AuthGate";
 import ActivityReporter from "../features/settings/ActivityReporter";
 import SettingsProvider, { useSettings } from "../features/settings/SettingsProvider";
 import AuthenticatedShell from "../shared/components/AuthenticatedShell";
+import { useScrollActivity } from "../shared/hooks/useScrollActivity";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
 function KeyNestApp() {
   const [activityError, setActivityError] = useState("");
   const { resetToDefaults } = useSettings();
+  useScrollActivity();
 
   return (
     <AuthGate onResetComplete={resetToDefaults}>

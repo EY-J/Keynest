@@ -160,7 +160,7 @@ async function fixture(changePassword = async () => "unlocked", flow = "change")
   render();
   for (const [timer, duration] of timers) if (duration === 0) { timers.delete(timer); timer(); }
   function open() { find(node => node.props.children === "Change").props.onClick(); render(); }
-  function fill(current = "old-password", next = "new-password-123", confirmation = next) {
+  function fill(current = "old-password", next = "V7!qR2@tL9#z", confirmation = next) {
     const fields = nodes().filter(node => node.type === "PasswordField");
     [current, next, confirmation].forEach((value, i) => fields[i].props.onChange(value));
     render();
@@ -274,7 +274,7 @@ test("pending submission blocks dismissals and duplicate calls; success closes w
   f.dismiss(); f.render(); await f.submit();
   assert.equal(f.find(n => n.type === "dialog").props["data-state"], "open");
   assert.equal(f.calls.length, 1);
-  assert.deepEqual(f.calls[0], ["old-password", "new-password-123"]);
+  assert.deepEqual(f.calls[0], ["old-password", "V7!qR2@tL9#z"]);
   assert.ok(f.nodes().filter(n => n.type === "PasswordField").every(n => n.props.disabled));
   resolve("unlocked"); await new Promise(setImmediate); f.render();
   assert.equal(f.find(n => n.type === "dialog").props["data-state"], "closing");
@@ -340,7 +340,7 @@ test("strength visibility, submission eligibility and mismatch feedback", async 
   const meter = () => f.find(n => n.props.className === "master-password-strength");
   assert.equal(meter(), undefined);
   assert.equal(submitButton().props.disabled, true);
-  for (const [password, expected] of [["123456789012", "Weak"], ["aaaaaaaaaaaa", "Good"], ["V7!qR2@tL9#z", "Strong"]]) {
+  for (const [password, expected] of [["123456789012", "Weak"], ["aaaaaaaaaaaa", "Weak"], ["kqmwzptxvbnr", "Good"], ["V7!qR2@tL9#z", "Strong"]]) {
     f.fill("old", password);
     assert.equal(meter().props["data-strength"], expected);
     assert.equal(submitButton().props.disabled, expected === "Weak");
@@ -395,7 +395,7 @@ for (const flow of ["setup", "recovery"]) {
       assert.equal(f.calls.length, 0);
     }
     assert.equal(f.find(n => n.props.role === "alert").props.children, "The passwords do not match.");
-    for (const [password, strength] of [["aaaaaaaaaaaa", "Good"], ["V7!qR2@tL9#z", "Strong"]]) {
+    for (const [password, strength] of [["kqmwzptxvbnr", "Good"], ["V7!qR2@tL9#z", "Strong"]]) {
       fill(password);
       assert.equal(button().props.disabled, false);
       assert.equal(meter().props["data-strength"], strength);

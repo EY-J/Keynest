@@ -3,21 +3,50 @@ import VaultModal from "../features/vault/components/VaultModal";
 import { ModalCloseButton, useModalClose } from "../shared/components/Modal/Modal";
 import VaultRecordDialog from "../features/vault/components/VaultRecordDialog";
 import VaultRecordForm from "../features/vault/components/VaultRecordForm";
+import VaultCardStack from "../features/vault/components/VaultCardStack";
+import VaultListView from "../features/vault/components/VaultListView";
+import VaultToolbar, {
+  type VaultViewMode,
+} from "../features/vault/components/VaultToolbar";
 import { vaultClient } from "../features/vault/vaultClient";
 import type { VaultRecordInput, VaultRecordSummary } from "../features/vault/types";
 
 const LOAD_ERROR_MESSAGE = "KeyNest could not load your vault.";
+const VAULT_VIEW_PREFERENCE_KEY = "keynest:vault-view";
+
+function getInitialViewMode(): VaultViewMode {
+  if (typeof window === "undefined") return "card";
+
+  try {
+    return window.localStorage.getItem(VAULT_VIEW_PREFERENCE_KEY) === "list"
+      ? "list"
+      : "card";
+  } catch {
+    return "card";
+  }
+}
 
 function normalized(value: string) {
   return value.trim().toLocaleLowerCase();
 }
 
-export default function PasswordVaultPage() {
+type PasswordVaultPageProps = {
+  favoriteRecordIds: ReadonlySet<string>;
+  favoritesOnly?: boolean;
+  onToggleFavorite(recordId: string): void;
+};
+
+export default function PasswordVaultPage({
+  favoriteRecordIds,
+  favoritesOnly = false,
+  onToggleFavorite,
+}: PasswordVaultPageProps) {
   const [records, setRecords] = useState<VaultRecordSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
+  const [viewMode, setViewMode] = useState<VaultViewMode>(getInitialViewMode);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isAddingPending, setIsAddingPending] = useState(false);
@@ -44,16 +73,31 @@ export default function PasswordVaultPage() {
     void loadRecords();
   }, []);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VAULT_VIEW_PREFERENCE_KEY, viewMode);
+    } catch {
+      // Storage availability should not prevent either view from working.
+    }
+  }, [viewMode]);
+
+  const availableRecords = useMemo(
+    () =>
+      favoritesOnly
+        ? records.filter((record) => favoriteRecordIds.has(record.id))
+        : records,
+    [favoriteRecordIds, favoritesOnly, records],
+  );
   const tags = useMemo(
-    () => [...new Set(records.flatMap((record) => record.tags))].sort(),
-    [records],
+    () => [...new Set(availableRecords.flatMap((record) => record.tags))].sort(),
+    [availableRecords],
   );
   const filteredRecords = useMemo(() => {
     const query = normalized(search);
     const selectedTag = normalized(tag);
 
-    return records.filter((record) => {
-      const searchValues = [record.name, ...record.tags];
+    return availableRecords.filter((record) => {
+      const searchValues = [record.name, record.username, record.website ?? "", ...record.tags];
       const matchesSearch =
         !query || searchValues.some((value) => normalized(value).includes(query));
       return (
@@ -61,7 +105,7 @@ export default function PasswordVaultPage() {
         (!selectedTag || record.tags.some((value) => normalized(value) === selectedTag))
       );
     });
-  }, [records, search, tag]);
+  }, [availableRecords, search, tag]);
 
   const addModal = useModalClose(() => {
     addGeneration.current += 1;
@@ -98,45 +142,28 @@ export default function PasswordVaultPage() {
   return (
     <main className="password-vault-page">
       <header className="vault-page-heading">
-        <div>
-          <p className="eyebrow">PRIVATE CREDENTIALS</p>
-          <h1>Vault</h1>
+        <div className="vault-heading-copy">
+          <p className="eyebrow">
+            {favoritesOnly ? "QUICK ACCESS" : "PRIVATE CREDENTIALS"}
+          </p>
+          <h1>{favoritesOnly ? "Favorites" : "Vault"}</h1>
           <p>
-            {records.length} {records.length === 1 ? "credential" : "credentials"}
+            {availableRecords.length}{" "}
+            {availableRecords.length === 1 ? "credential" : "credentials"}
           </p>
         </div>
-        <button
-          ref={addButtonRef}
-          data-vault-modal-fallback
-          className="primary-button"
-          type="button"
-          onClick={openAddDialog}
-        >
-          Add Credential
-        </button>
+        <VaultToolbar
+          search={search}
+          tag={tag}
+          tags={tags}
+          viewMode={viewMode}
+          addButtonRef={addButtonRef}
+          onSearchChange={setSearch}
+          onTagChange={setTag}
+          onViewModeChange={setViewMode}
+          onAddCredential={openAddDialog}
+        />
       </header>
-
-      <section className="vault-controls" aria-label="Filter credentials">
-        <label className="vault-search-field">
-          <span>Search credentials</span>
-          <input
-            type="search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Tag</span>
-          <select value={tag} onChange={(event) => setTag(event.target.value)}>
-            <option value="">All tags</option>
-            {tags.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
 
       {isLoading ? (
         <p className="vault-status" role="status">
@@ -162,33 +189,43 @@ export default function PasswordVaultPage() {
       ) : null}
       {!isLoading &&
       !loadError &&
+      favoritesOnly &&
       records.length > 0 &&
+      availableRecords.length === 0 ? (
+        <section className="vault-empty-state">
+          <h2>No favorite credentials</h2>
+          <p>Use the Star on a credential to add it here.</p>
+        </section>
+      ) : null}
+      {!isLoading &&
+      !loadError &&
+      availableRecords.length > 0 &&
       filteredRecords.length === 0 ? (
         <p className="vault-status">No matching credentials</p>
       ) : null}
       {!isLoading && !loadError && filteredRecords.length > 0 ? (
-        <section className="vault-record-grid" aria-label="Credentials">
-          {filteredRecords.map((record) => (
-            <button
-              className="vault-record-card keynest-button"
-              key={record.id}
-              type="button"
-              onClick={() => setSelectedRecordId(record.id)}
-            >
-              <strong>{record.name}</strong>
-              <span>{record.username}</span>
-              {record.website ? <span>{record.website}</span> : null}
-              {record.tags.length ? (
-                <span>{record.tags.map((item) => `#${item}`).join(" ")}</span>
-              ) : null}
-            </button>
-          ))}
-        </section>
+        viewMode === "card" ? (
+          <VaultCardStack
+            records={filteredRecords}
+            favoriteRecordIds={favoriteRecordIds}
+            onOpenRecord={setSelectedRecordId}
+            onToggleFavorite={onToggleFavorite}
+          />
+        ) : (
+          <VaultListView
+            records={filteredRecords}
+            favoriteRecordIds={favoriteRecordIds}
+            onOpenRecord={setSelectedRecordId}
+            onToggleFavorite={onToggleFavorite}
+          />
+        )
       ) : null}
 
       {isAdding ? (
         <VaultModal
           titleId="add-credential-title"
+          className="add-credential-dialog"
+          width={640}
           closing={addModal.closing}
           onExitComplete={addModal.finishClose}
           onRequestClose={closeAddDialog}
@@ -196,12 +233,12 @@ export default function PasswordVaultPage() {
           initialFocusRef={addNameRef}
           fallbackFocusRef={addButtonRef}
         >
-          <div className="vault-dialog-title">
+          <header className="vault-dialog-title">
             <div>
               <h2 id="add-credential-title">Add credential</h2>
             </div>
             <ModalCloseButton label="Close credential" onClick={closeAddDialog} disabled={isAddingPending || addModal.closing} />
-          </div>
+          </header>
           <VaultRecordForm
             onSubmit={createRecord}
             onCancel={closeAddDialog}
@@ -214,8 +251,10 @@ export default function PasswordVaultPage() {
         <VaultRecordDialog
           key={selectedRecordId}
           recordId={selectedRecordId}
+          isFavorite={favoriteRecordIds.has(selectedRecordId)}
           onClose={() => setSelectedRecordId(null)}
           onChanged={loadRecords}
+          onToggleFavorite={() => onToggleFavorite(selectedRecordId)}
           fallbackFocusRef={addButtonRef}
         />
       ) : null}

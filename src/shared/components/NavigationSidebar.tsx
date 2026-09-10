@@ -10,9 +10,9 @@ import {
 
 type NavigationSidebarProps = {
   isOpen: boolean;
-  activeDestination: "home" | "vault" | "settings";
+  activeDestination: "home" | "vault" | "favorites" | "settings";
   onClose(): void;
-  onNavigate(destination: "home" | "vault" | "settings"): void;
+  onNavigate(destination: "home" | "vault" | "favorites" | "settings"): void;
   onLockKeynest(): Promise<void>;
 };
 
@@ -23,7 +23,7 @@ export default function NavigationSidebar({
   onNavigate,
   onLockKeynest,
 }: NavigationSidebarProps) {
-  function navigate(destination: "home" | "vault" | "settings") {
+  function navigate(destination: "home" | "vault" | "favorites" | "settings") {
     onNavigate(destination);
   }
 
@@ -76,7 +76,7 @@ export default function NavigationSidebar({
             onClick={() => navigate("vault")}
           >
             <KeyRound className="sidebar-link-icon" size={20} aria-hidden="true" />
-            <span className="sidebar-link-label">Password Vault</span>
+            <span className="sidebar-link-label">Vault</span>
           </button>
 
           <button className="sidebar-link" type="button" disabled>
@@ -100,7 +100,14 @@ export default function NavigationSidebar({
             Quick Access
           </h2>
 
-          <button className="sidebar-link" type="button">
+          <button
+            className={`sidebar-link ${
+              activeDestination === "favorites" ? "active" : ""
+            }`}
+            type="button"
+            aria-current={activeDestination === "favorites" ? "page" : undefined}
+            onClick={() => navigate("favorites")}
+          >
             <Star className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Favorites</span>
           </button>

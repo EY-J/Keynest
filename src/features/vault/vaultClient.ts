@@ -43,4 +43,6 @@ export const vaultClient = {
     invokeVault<void>("delete_vault_record", { id }),
   copyVaultPassword: (id: string) =>
     invokeVault<void>("copy_vault_password", { id }),
+  copyVaultUsername: (id: string) =>
+    invokeVault<void>("copy_vault_username", { id }),
 };
