@@ -2,6 +2,7 @@ mod autofill;
 mod diagnostics;
 mod ipc;
 mod platform;
+mod profile;
 mod security;
 mod settings;
 #[allow(dead_code)]
@@ -14,6 +15,7 @@ use ipc::DataFolderService;
 use platform::startup::{
     minimize_for_launch, StartupService, TauriMainWindowMinimizer, TauriStartupRegistration,
 };
+use profile::ProfileService;
 use security::{
     AuthService, AutoLockService, ClipboardService, KdfParams, LockCoordinator, OsEntropy,
     ProfileStore, SecurityOperationGate, TauriClipboardPort, TauriLockEventSink,
@@ -83,6 +85,7 @@ pub fn run() {
             app.manage(StartupService::new(Arc::new(
                 TauriStartupRegistration::new(app.handle().clone()),
             )));
+            app.manage(ProfileService::new(app_data_dir.clone()));
 
             let settings_store = SettingsStore::new(app_data_dir.clone());
             let settings = SettingsService::load(settings_store)?;
@@ -152,6 +155,8 @@ pub fn run() {
             ipc::copy_recovery_key,
             ipc::unlock,
             ipc::lock,
+            ipc::get_profile,
+            ipc::save_profile,
             ipc::get_settings,
             ipc::set_auto_lock_seconds,
             ipc::set_clipboard_clear_seconds,

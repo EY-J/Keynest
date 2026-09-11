@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import Modal, { useModalClose } from "../../../shared/components/Modal/Modal";
+import Modal, { useModalClose } from "../../../components/ui/Modal/Modal";
 import PasswordField from "../../auth/components/PasswordField";
 
 type AuthenticatedResetDialogProps = {

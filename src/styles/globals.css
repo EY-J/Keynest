@@ -1,4 +1,4 @@
-@import "./assets/fonts/fonts.css";
+@import "../assets/fonts/fonts.css";
 
 :root,
 :root[data-theme="dark"] {
@@ -403,32 +403,29 @@ time {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  width: 100%;
   min-width: 0;
-  padding: 0 6px 16px;
+  padding: 4px 6px 13px;
   border-bottom: 1px solid var(--kn-border);
 }
 
 .sidebar-avatar {
-  width: 46px;
-  height: 46px;
-  display: grid;
+  width: 42px;
+  height: 42px;
   flex: 0 0 auto;
-  place-items: center;
   border: 1px solid var(--kn-border-strong);
-  border-radius: 12px;
+  border-radius: 50%;
   background: var(--kn-accent-soft);
-  color: var(--kn-accent);
-  font-size: 16px;
-  font-weight: 600;
+  object-fit: cover;
 }
 
 .sidebar-profile-details {
   min-width: 0;
 }
 
-.sidebar-profile strong,
-.sidebar-profile span {
+.sidebar-profile-details strong,
+.sidebar-profile-details > span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -436,15 +433,15 @@ time {
 }
 
 .sidebar-profile strong {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
 }
 
-.sidebar-profile span {
-  margin-top: 3px;
+.sidebar-profile-details > span {
+  margin-top: 2px;
   color: var(--kn-muted);
-  font-size: var(--text-secondary);
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -570,6 +567,7 @@ time {
     padding: 16px 14px;
   }
 }
+
 
 @media (max-width: 560px) {
   .navigation-sidebar {
@@ -899,7 +897,7 @@ time {
   text-transform: uppercase;
 }
 
-.recovery-dialog h2 { margin: 0 0 6px; font: 700 23px/1.2 var(--font-ui); }
+.recovery-dialog h2 { margin: 0 0 6px; color: var(--kn-text); font: 700 23px/1.2 var(--font-ui); }
 
 .recovery-key-content {
   display: grid;
@@ -1119,10 +1117,9 @@ time {
 }
 
 .settings-section-header {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
-.settings-kicker,
 .settings-group-label {
   font-family: var(--font-mono);
   margin: 0 0 6px;
@@ -1134,18 +1131,19 @@ time {
 
 .settings-section-header h1 {
   margin: 0;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: -0.025em;
 }
 
 .settings-section-header > p:last-child {
-  margin: 8px 0 0;
+  margin: 7px 0 0;
   color: var(--kn-muted);
-  font-size: var(--text-body);
+  font-size: 14px;
   font-weight: 400;
-  line-height: 1.45;
+  line-height: 1.4;
+  opacity: 0.7;
 }
 
 .settings-section-body,
@@ -1156,10 +1154,6 @@ time {
 .security-settings {
   display: grid;
   gap: 9px;
-}
-
-#security-panel .settings-section-header {
-  margin-bottom: 20px;
 }
 
 .security-settings .settings-row {
@@ -1264,6 +1258,35 @@ time {
   gap: 6px;
   padding-inline: 9px;
   font-variant-numeric: tabular-nums;
+}
+
+.settings-row .keynest-select.settings-time-select {
+  width: 160px;
+  min-width: min(150px, 100%);
+  max-width: 100%;
+}
+
+.settings-time-select .keynest-select__trigger,
+.settings-time-select :is(.keynest-select__value, .keynest-select__placeholder) {
+  white-space: nowrap;
+}
+
+.settings-time-select-menu .keynest-select__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.settings-time-select-menu .keynest-select__option > span {
+  min-width: 0;
+  flex: 1;
+  white-space: nowrap;
+}
+
+.settings-time-select-menu .keynest-select__option > svg {
+  flex-shrink: 0;
 }
 
 .settings-group-label {
@@ -1884,7 +1907,6 @@ footer {
 }
 
 .vault-page-heading,
-.vault-page-heading,
 .vault-dialog-actions {
   display: flex;
   align-items: center;
@@ -2091,7 +2113,6 @@ footer {
   color: var(--kn-text);
 }
 
-.vault-record-form input:focus,
 .vault-record-form select:focus,
 .vault-delete-confirmation input:focus,
 .vault-password-display input:focus,
@@ -2478,6 +2499,7 @@ footer {
 
 .add-credential-dialog .vault-record-form label,
 .add-credential-dialog .vault-form-field {
+  min-width: 0;
   gap: 6px;
   font-weight: 600;
 }
@@ -2496,7 +2518,10 @@ footer {
 .add-credential-dialog .vault-form-password { grid-column: 1 / -1; grid-row: 3; }
 .add-credential-dialog .vault-form-error { grid-column: 1 / -1; }
 
-.add-credential-dialog .vault-record-form input {
+.add-credential-dialog .vault-form-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   height: 48px;
   min-height: 48px;
   border: 1px solid var(--kn-border);
@@ -2507,12 +2532,12 @@ footer {
   transition: border-color 140ms ease, background-color 140ms ease;
 }
 
-.add-credential-dialog .vault-record-form input:hover:not(:disabled):not(:focus) {
+.add-credential-dialog .vault-form-input:hover:not(:disabled):not(:focus) {
   border-color: var(--kn-border-strong);
 }
 
-.add-credential-dialog .vault-record-form input:is(:focus, :focus-visible) {
-  border-color: var(--kn-accent);
+.add-credential-dialog .vault-form-input:is(:focus, :focus-visible) {
+  border: 1px solid var(--kn-accent);
   outline: none;
   box-shadow: none;
 }

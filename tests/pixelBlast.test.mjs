@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { transformWithOxc } from "vite";
 
 // Exercise the actual effect with fake browser/GPU ports, without an auth profile.
-const filename = new URL("../src/shared/components/PixelBlast/PixelBlast.jsx", import.meta.url);
+const filename = new URL("../src/components/effects/PixelBlast/PixelBlast.jsx", import.meta.url);
 const { code } = await transformWithOxc(await readFile(filename, "utf8"), filename.pathname);
 
 async function fixture({ failRenderer = false, failRender = false, props = {} } = {}) {

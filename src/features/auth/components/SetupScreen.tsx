@@ -1,6 +1,6 @@
 import { type FormEvent, useRef, useState } from "react";
 import { validateMasterPassword } from "../../../shared/security/masterPasswordPolicy";
-import MasterPasswordStrength from "../../../shared/components/MasterPasswordStrength";
+import PasswordStrengthMeter from "../../../components/ui/PasswordStrengthMeter";
 import { authClient } from "../authClient";
 import { AuthClientError } from "../types";
 import AuthLayout from "./AuthLayout";
@@ -90,7 +90,7 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
             autoFocus
             disabled={isSubmitting}
           />
-          <MasterPasswordStrength password={password} />
+          <PasswordStrengthMeter password={password} />
         </div>
         <PasswordField
           label="Confirm master password"

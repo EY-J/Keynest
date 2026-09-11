@@ -1,4 +1,4 @@
-import BrandMark from "../shared/components/BrandMark";
+import BrandMark from "../../components/ui/BrandMark";
 
 type HomePageProps = {
   onNavigateToVault: () => void;

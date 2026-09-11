@@ -5,7 +5,7 @@ import { mount, deferred } from "./componentHarness.mjs";
 for (const authenticated of [false, true]) {
   test(`${authenticated ? "authenticated" : "locked"} reset retains confirmation through exit and cleans on close`, async () => {
     let closed = 0;
-    const f = await mount(authenticated ? "../src/features/settings/components/AuthenticatedResetDialog.tsx" : "../src/features/auth/components/ResetDialog.tsx",
+    const f = await mount(authenticated ? "../src/features/settings/components/AuthenticatedResetDialog.tsx" : "../src/features/auth/components/UnauthenticatedResetDialog.tsx",
       { isOpen: true, onClose() { closed++; }, onReset: async () => {} },
       { "../../auth/components/PasswordField": { default: "PasswordField" } });
     const modal = () => f.tree().props;
@@ -21,7 +21,7 @@ for (const authenticated of [false, true]) {
   });
   test(`${authenticated ? "authenticated" : "locked"} reset preserves pending dismissal guard`, async () => {
     const pending = deferred();
-    const f = await mount(authenticated ? "../src/features/settings/components/AuthenticatedResetDialog.tsx" : "../src/features/auth/components/ResetDialog.tsx",
+    const f = await mount(authenticated ? "../src/features/settings/components/AuthenticatedResetDialog.tsx" : "../src/features/auth/components/UnauthenticatedResetDialog.tsx",
       { isOpen: true, onClose() {}, onReset: () => pending.promise }, { "../../auth/components/PasswordField": { default: "PasswordField" } });
     f.find(n => n.type === "input").props.onChange({ target: { value: "RESET KEYNEST" } });
     if (authenticated) f.find(n => n.type === "PasswordField").props.onChange("fixture password");
@@ -37,7 +37,7 @@ test("recovery management forbids accidental dismissal of replacement key and wa
   const f = await mount("../src/features/settings/components/RecoverySettings.tsx", {}, {
     "lucide-react": { KeyRound: "icon", X: "icon" }, "./SettingsRow": { default: "SettingsRow" },
     "../../auth/components/PasswordField": { default: "PasswordField" },
-    "../../auth/components/RecoveryKeyScreen": { RecoveryKeyContent: "RecoveryKeyContent" },
+    "../../auth/components/RecoveryKeyScreen": { RecoveryKeyConfirmation: "RecoveryKeyConfirmation" },
     "../../auth/types": { AuthClientError: Error },
     "../../auth/authClient": { authClient: {
       getRecoveryStatus: async () => ({ configured: true }),
@@ -51,9 +51,9 @@ test("recovery management forbids accidental dismissal of replacement key and wa
   const modal = () => f.find(n => n.props.titleId === "recovery-key-dialog-title");
   assert.equal(modal().props.closeOnEscape, false);
   assert.equal(modal().props.closeOnBackdrop, undefined);
-  await f.find(n => n.type === "RecoveryKeyContent").props.onSaved(); await f.flush();
+  await f.find(n => n.type === "RecoveryKeyConfirmation").props.onSaved(); await f.flush();
   assert.equal(modal().props.closing, true);
-  assert.ok(f.find(n => n.type === "RecoveryKeyContent"));
+  assert.ok(f.find(n => n.type === "RecoveryKeyConfirmation"));
   modal().props.onExitComplete(); await f.flush(); assert.ok(!modal());
   assert.doesNotMatch(JSON.stringify(f.tree()), /fixture-secret-key/); f.unmount();
 });

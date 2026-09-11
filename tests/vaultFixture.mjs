@@ -16,24 +16,24 @@ export async function vaultFixture(
 ) {
   const calls = [];
   let closed = false;
-  const f = await mount("../src/features/vault/components/VaultRecordDialog.tsx", {
-    recordId: "a", isFavorite: false,
+  const f = await mount("../src/features/vault/components/CredentialDetailsModal.tsx", {
+    credentialId: "a", isFavorite: false,
     onClose: () => { closed = true; }, onChanged: async () => {},
     onToggleFavorite: () => { calls.push(["favorite", "a"]); },
   }, {
     "../vaultClient": { vaultClient: {
-      getVaultRecordSummary: async id => { calls.push(["summary", id]); return getSummary(id); },
-      getVaultRecord: id => { calls.push(["secret", id]); return getSecret(id); },
-      copyVaultPassword: async id => { calls.push(["copy", id]); },
-      copyVaultUsername: async id => { calls.push(["copy-username", id]); },
-      updateVaultRecord: async (id, input) => { calls.push(["update", id, input]); },
+      getCredentialSummary: async id => { calls.push(["summary", id]); return getSummary(id); },
+      getCredential: id => { calls.push(["secret", id]); return getSecret(id); },
+      copyCredentialPassword: async id => { calls.push(["copy", id]); },
+      copyCredentialUsername: async id => { calls.push(["copy-username", id]); },
+      updateCredential: async (id, input) => { calls.push(["update", id, input]); },
     } },
     "@tauri-apps/plugin-opener": {
       openUrl: async value => { calls.push(["open", value.toString()]); },
     },
     "./VaultModal": { default: "VaultModal" },
-    "./VaultRecordForm": { default: "VaultRecordForm" },
-    "../../../shared/components/ServiceIcon": { default: "ServiceIcon" },
+    "./CredentialForm": { default: "CredentialForm" },
+    "../../../components/ui/ServiceLogo": { default: "ServiceLogo" },
     "lucide-react": {
       Check: "Check", Copy: "Copy", Eye: "Eye", EyeOff: "EyeOff",
       ExternalLink: "ExternalLink", Link2: "Link2", LockKeyhole: "LockKeyhole",

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Layers3, List, Plus, Search, Tag } from "lucide-react";
-import KeyNestSelect from "../../../shared/components/KeyNestSelect";
+import Select from "../../../components/ui/Select";
 
 export type VaultViewMode = "card" | "list";
 
@@ -56,7 +56,7 @@ export default function VaultToolbar({
         <kbd>Ctrl K</kbd>
       </label>
 
-      <KeyNestSelect
+      <Select
         className="vault-filter-control"
         menuClassName="vault-tag-select-menu"
         value={tag}

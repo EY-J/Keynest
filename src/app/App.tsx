@@ -1,10 +1,10 @@
-import "../App.css";
+import "../styles/globals.css";
 import { useState } from "react";
 import AuthGate from "../features/auth/components/AuthGate";
-import ActivityReporter from "../features/settings/ActivityReporter";
+import ActivityReporter from "../features/settings/components/ActivityReporter";
 import SettingsProvider, { useSettings } from "../features/settings/SettingsProvider";
-import AuthenticatedShell from "../shared/components/AuthenticatedShell";
-import { useScrollActivity } from "../shared/hooks/useScrollActivity";
+import AppShell from "./AppShell";
+import { useScrollActivity } from "../hooks/useScrollActivity";
 
 export default function App() {
   return (
@@ -29,7 +29,7 @@ function KeyNestApp() {
               {activityError}
             </p>
           ) : null}
-          <AuthenticatedShell
+          <AppShell
             onLockKeynest={lock}
             onResetAuthenticated={resetAuthenticated}
           />

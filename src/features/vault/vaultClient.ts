@@ -2,9 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { publicError } from "../../shared/security/publicErrors";
 import {
   VaultClientError,
-  type VaultRecord,
-  type VaultRecordInput,
-  type VaultRecordSummary,
+  type Credential,
+  type CredentialInput,
+  type CredentialSummary,
 } from "./types";
 
 type InvokeArguments = Record<string, unknown>;
@@ -29,20 +29,20 @@ function normalizeVaultError(error: unknown): VaultClientError {
 }
 
 export const vaultClient = {
-  listVaultRecords: () =>
-    invokeVault<VaultRecordSummary[]>("list_vault_records"),
-  createVaultRecord: (input: VaultRecordInput) =>
-    invokeVault<VaultRecordSummary>("create_vault_record", { input }),
-  getVaultRecord: (id: string) =>
-    invokeVault<VaultRecord>("get_vault_record", { id }),
-  getVaultRecordSummary: (id: string) =>
-    invokeVault<VaultRecordSummary>("get_vault_record_summary", { id }),
-  updateVaultRecord: (id: string, input: VaultRecordInput) =>
-    invokeVault<VaultRecordSummary>("update_vault_record", { id, input }),
-  deleteVaultRecord: (id: string) =>
+  listCredentials: () =>
+    invokeVault<CredentialSummary[]>("list_vault_records"),
+  createCredential: (input: CredentialInput) =>
+    invokeVault<CredentialSummary>("create_vault_record", { input }),
+  getCredential: (id: string) =>
+    invokeVault<Credential>("get_vault_record", { id }),
+  getCredentialSummary: (id: string) =>
+    invokeVault<CredentialSummary>("get_vault_record_summary", { id }),
+  updateCredential: (id: string, input: CredentialInput) =>
+    invokeVault<CredentialSummary>("update_vault_record", { id, input }),
+  deleteCredential: (id: string) =>
     invokeVault<void>("delete_vault_record", { id }),
-  copyVaultPassword: (id: string) =>
+  copyCredentialPassword: (id: string) =>
     invokeVault<void>("copy_vault_password", { id }),
-  copyVaultUsername: (id: string) =>
+  copyCredentialUsername: (id: string) =>
     invokeVault<void>("copy_vault_username", { id }),
 };

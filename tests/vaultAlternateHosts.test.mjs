@@ -4,9 +4,9 @@ import { mount } from "./componentHarness.mjs";
 import { summary } from "./vaultFixture.mjs";
 
 const dependencies = {
-  "./PasswordGenerator": { generateAdvancedPassword: () => "generated-fixture" },
-  "../../../shared/components/MasterPasswordStrength": {
-    default: "MasterPasswordStrength",
+  "../passwordGenerator": { generateAdvancedPassword: () => "generated-fixture" },
+  "../../../components/ui/PasswordStrengthMeter": {
+    default: "PasswordStrengthMeter",
   },
 };
 
@@ -30,7 +30,7 @@ function change(form, predicate, value) {
 test("normal Add Credential UI shows Website only and new records submit no alternate hosts", async () => {
   let submitted;
   const form = await mount(
-    "../src/features/vault/components/VaultRecordForm.tsx",
+    "../src/features/vault/components/CredentialForm.tsx",
     {
       onSubmit: async input => { submitted = input; },
       onCancel() {},
@@ -54,7 +54,7 @@ test("normal Add Credential UI shows Website only and new records submit no alte
 test("normal Edit Credential UI preserves hidden alternate hosts across all ordinary edits", async () => {
   let submitted;
   const form = await mount(
-    "../src/features/vault/components/VaultRecordForm.tsx",
+    "../src/features/vault/components/CredentialForm.tsx",
     {
       initialRecord: {
         ...summary("alternate-host"),

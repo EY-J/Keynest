@@ -1,12 +1,12 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
-import Modal, { ModalCloseButton, useModalClose } from "../../shared/components/Modal/Modal";
-import ServiceIcon from "../../shared/components/ServiceIcon";
+import Modal, { ModalCloseButton, useModalClose } from "../../../components/ui/Modal/Modal";
+import ServiceLogo from "../../../components/ui/ServiceLogo";
 import {
   hostApprovalClient,
   type HostApprovalCandidate,
   type PendingHostApproval,
-} from "./hostApprovalClient";
+} from "../hostApprovalClient";
 
 const HOST_APPROVAL_EVENT = "keynest://host-approval-requested";
 
@@ -131,7 +131,7 @@ export default function HostApprovalModal() {
             {candidates.map(candidate => (
               <button className="host-approval-candidate" type="button" key={candidate.credentialId}
                 onClick={() => setSelected(candidate)} disabled={saving}>
-                <ServiceIcon name={candidate.name} website={candidate.website} size="small" />
+                <ServiceLogo name={candidate.name} website={candidate.website} size="small" />
                 <span className="host-approval-candidate-copy"><strong>{candidate.name}</strong><small>{candidate.username}</small>
                   <small>Saved website: {candidate.website || "Not set"}</small></span>
                 <span aria-hidden="true">›</span>

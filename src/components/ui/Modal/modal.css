@@ -38,7 +38,7 @@
 .keynest-modal-active .settings-page, .keynest-modal-active .settings-content,
 .keynest-modal-active .settings-category-nav, .keynest-modal-active .password-vault-page,
 .keynest-modal-active .home-page { overflow: hidden !important; }
-.keynest-modal :is(button:not(.keynest-select__trigger), input, select, textarea):focus-visible { outline: 2px solid var(--kn-accent); outline-offset: 2px; }
+.keynest-modal :is(button:not(.keynest-select__trigger), input:not(.vault-form-input), select, textarea):focus-visible { outline: 2px solid var(--kn-accent); outline-offset: 2px; }
 .keynest-modal button.keynest-modal__close {
   --button-bg: transparent;
   --button-bg-hover: transparent;

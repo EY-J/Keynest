@@ -2,17 +2,17 @@ import { type FormEvent, useState } from "react";
 import AuthLayout from "./AuthLayout";
 import { authClient } from "../authClient";
 
-type RecoveryKeyContentProps = {
+type RecoveryKeyConfirmationProps = {
   recoveryKey: string;
   previousKeyInvalid?: boolean;
   onSaved: () => Promise<void>;
 };
 
-export function RecoveryKeyContent({
+export function RecoveryKeyConfirmation({
   recoveryKey,
   previousKeyInvalid = false,
   onSaved,
-}: RecoveryKeyContentProps) {
+}: RecoveryKeyConfirmationProps) {
   const keyGroups = recoveryKey.split("-");
   const finalGroup = keyGroups[keyGroups.length - 1] ?? "";
   const [verification, setVerification] = useState("");
@@ -106,7 +106,7 @@ export function RecoveryKeyContent({
   );
 }
 
-type RecoveryKeyScreenProps = RecoveryKeyContentProps;
+type RecoveryKeyScreenProps = RecoveryKeyConfirmationProps;
 
 export default function RecoveryKeyScreen(props: RecoveryKeyScreenProps) {
   return (
@@ -115,7 +115,7 @@ export default function RecoveryKeyScreen(props: RecoveryKeyScreenProps) {
       title="Save your Recovery Key"
       description="If you forget your Master Password, this Recovery Key can restore access to your KeyNest data."
     >
-      <RecoveryKeyContent {...props} />
+      <RecoveryKeyConfirmation {...props} />
     </AuthLayout>
   );
 }

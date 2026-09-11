@@ -27,7 +27,6 @@ export default function GeneralSettings() {
       <SettingsRow
         icon={Power}
         title="Launch at Startup"
-        description="Open KeyNest minimized and locked when Windows starts."
       >
         <div className="settings-control-stack">
           <label className="settings-switch">

@@ -3,7 +3,7 @@ import { authClient } from "../authClient";
 import { AuthClientError } from "../types";
 import AuthLayout from "./AuthLayout";
 import PasswordField from "./PasswordField";
-import ResetDialog from "./ResetDialog";
+import UnauthenticatedResetDialog from "./UnauthenticatedResetDialog";
 import RecoverPasswordDialog from "./RecoverPasswordDialog";
 import RecoveryKeyScreen from "./RecoveryKeyScreen";
 import LockScreenBackground from "./LockScreenBackground";
@@ -147,7 +147,7 @@ export default function UnlockScreen({
         }}
       />
 
-      <ResetDialog
+      <UnauthenticatedResetDialog
         isOpen={isResetOpen}
         onClose={() => setIsResetOpen(false)}
         onReset={onReset}

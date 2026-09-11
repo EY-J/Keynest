@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
-import { getServiceIdentity } from "../siteIdentity";
+import { getServiceIdentity } from "../../utils/serviceIdentity";
 
-type ServiceIconProps = {
+type ServiceLogoProps = {
   name: string;
   website?: string | null;
   size?: "small" | "medium" | "large";
@@ -13,13 +13,13 @@ function logoHue(name: string) {
   return [...name].reduce((total, character) => total + character.charCodeAt(0), 0) % 360;
 }
 
-export default function ServiceIcon({
+export default function ServiceLogo({
   name,
   website,
   size = "medium",
   decorative = true,
   className = "",
-}: ServiceIconProps) {
+}: ServiceLogoProps) {
   const service = getServiceIdentity(website);
   const label = service?.label ?? `${name || "Credential"} monogram`;
   const style = service ? undefined : { "--vault-logo-hue": logoHue(name) };

@@ -12,7 +12,7 @@ async function fixture(overrides = {}, duration = "0.18s") {
   const dialog = { showModal() { shown++; }, close() { closed++; }, focus() { focused = "dialog"; },
     querySelector: () => field, querySelectorAll: () => [field, last],
     getBoundingClientRect: () => ({ left: 100, right: 620, top: 110, bottom: 500 }) };
-  const f = await mount("../src/shared/components/Modal/Modal.tsx", {
+  const f = await mount("../src/components/ui/Modal/Modal.tsx", {
     titleId: "fixture-title", closing: false, children: "fixture content", onClose() { requested++; }, onExitComplete() { exited++; }, ...overrides,
   }, {}, { document: { activeElement: opener, documentElement: root },
     globals: { HTMLElement: Element, getComputedStyle: () => ({ animationDuration: duration }) },

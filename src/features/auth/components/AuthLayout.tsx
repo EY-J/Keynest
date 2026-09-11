@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import AppTitleBar from "../../../shared/components/AppTitleBar";
-import BrandMark from "../../../shared/components/BrandMark";
+import AppTitleBar from "../../../app/components/AppTitleBar";
+import BrandMark from "../../../components/ui/BrandMark";
 
 type AuthLayoutProps = {
   eyebrow: string;

@@ -1,4 +1,4 @@
-export type VaultRecordInput = {
+export type CredentialInput = {
   name: string;
   username: string;
   password: string;
@@ -7,7 +7,7 @@ export type VaultRecordInput = {
   tags: string[];
 };
 
-export type VaultRecordSummary = {
+export type CredentialSummary = {
   id: string;
   name: string;
   username: string;
@@ -18,7 +18,7 @@ export type VaultRecordSummary = {
   updatedAtMs: number;
 };
 
-export type VaultRecord = {
+export type Credential = {
   id: string;
   name: string;
   username: string;

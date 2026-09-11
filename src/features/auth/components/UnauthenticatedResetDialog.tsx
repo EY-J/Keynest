@@ -1,17 +1,17 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import Modal, { useModalClose } from "../../../shared/components/Modal/Modal";
+import Modal, { useModalClose } from "../../../components/ui/Modal/Modal";
 
-type ResetDialogProps = {
+type UnauthenticatedResetDialogProps = {
   isOpen: boolean;
   onClose: () => void;
   onReset: (confirmation: string) => Promise<void>;
 };
 
-export default function ResetDialog({
+export default function UnauthenticatedResetDialog({
   isOpen,
   onClose,
   onReset,
-}: ResetDialogProps) {
+}: UnauthenticatedResetDialogProps) {
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);

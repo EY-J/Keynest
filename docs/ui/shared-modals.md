@@ -9,14 +9,14 @@
 | Locked/data-error destructive reset | ResetDialog | No backdrop; Escape unless submitting |
 | Authenticated destructive reset | AuthenticatedResetDialog | No backdrop; Escape unless submitting |
 | Recovery management, creation/regeneration, replacement-key display | RecoverySettings | No backdrop; Escape only before replacement-key display and when not submitting |
-| Add Credential | PasswordVaultPage / VaultModal | Both allowed unless saving/closing |
+| Add Credential | VaultPage / VaultModal | Both allowed unless saving/closing |
 | View / Reveal / Edit / Delete Credential | VaultRecordDialog / VaultModal | Both allowed unless pending/closing |
 
 Edit/delete/reveal are states of the existing credential dialog, not separate overlays. Recovery choice/form and regeneration/key acknowledgement likewise remain in one dialog. Setup/post-recovery RecoveryKeyScreen is a full-page auth screen, not a popup; unchanged. Navigation sidebar, inline errors, password generator and native select menus are not application modals; unchanged. No other application popup was found by the final dialog/modal/overlay/backdrop audit.
 
 ## Shared implementation
 
-`src/shared/components/Modal/Modal.tsx` contains the native dialog wrapper, delayed-close hook and Lucide close button. `modal.css` owns all modal positioning, backdrop and animation tokens. VaultModal is now only a sizing/prop adapter. Native `showModal()` supplies the top layer and background inertness without a portal or arbitrary z-index; all focus trapping and opener/fallback restoration is centralized.
+`src/components/ui/Modal/Modal.tsx` contains the native dialog wrapper, delayed-close hook and Lucide close button. `modal.css` owns all modal positioning, backdrop and animation tokens. VaultModal is now only a sizing/prop adapter. Native `showModal()` supplies the top layer and background inertness without a portal or arbitrary z-index; all focus trapping and opener/fallback restoration is centralized.
 
 - Entry: 280ms, cubic-bezier(0.16, 1, 0.3, 1), opacity plus -18px/0.97 to neutral.
 - Exit: 180ms, cubic-bezier(0.4, 0, 1, 1), opacity plus -10px/0.98.
@@ -32,8 +32,8 @@ Removed Change Master Password's separate animation/focus/timer code and keyfram
 
 ## Changed files
 
-- New: `src/shared/components/Modal/{Modal.tsx,modal.css}`, `tests/{modal.test.mjs,modalIntegration.test.mjs}`, this report.
-- Migrated: `src/features/settings/components/{ChangeMasterPasswordForm.tsx,ChangeMasterPasswordForm.css,AuthenticatedResetDialog.tsx,RecoverySettings.tsx}`, `src/features/auth/components/{ResetDialog.tsx,RecoverPasswordDialog.tsx}`, `src/features/vault/components/{VaultModal.tsx,VaultRecordDialog.tsx}`, `src/pages/PasswordVaultPage.tsx`, `src/App.css`.
+- Shared modal: `src/components/ui/Modal/{Modal.tsx,modal.css}` with coverage in `tests/{modal.test.mjs,modalIntegration.test.mjs}`.
+- Consumers: Settings, Auth/Recovery, Vault, and host-approval components use the shared modal; page-level rules remain in `src/styles/globals.css`.
 - Updated test ports: `tests/{changeMasterPassword.test.mjs,componentHarness.mjs,vaultFixture.mjs}`.
 
 ## Validation

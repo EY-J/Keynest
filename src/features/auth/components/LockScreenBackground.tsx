@@ -8,7 +8,7 @@ import {
 } from "react";
 import "./LockScreenBackground.css";
 
-const PixelBlast = lazy(() => import("../../../shared/components/PixelBlast/PixelBlast"));
+const PixelBlast = lazy(() => import("../../../components/effects/PixelBlast/PixelBlast"));
 
 // Decorative assets must not prevent access to the password/recovery form.
 class BackgroundFallback extends Component<

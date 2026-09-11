@@ -1,7 +1,7 @@
-import { masterPasswordStrength } from "../security/masterPasswordPolicy";
-import "./MasterPasswordStrength.css";
+import { masterPasswordStrength } from "../../shared/security/masterPasswordPolicy";
+import "./PasswordStrengthMeter.css";
 
-export default function MasterPasswordStrength({ password }: { password: string }) {
+export default function PasswordStrengthMeter({ password }: { password: string }) {
   if (!password) return null;
   const strength = masterPasswordStrength(password);
   return (

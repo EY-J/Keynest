@@ -34,7 +34,6 @@ export default function AppearanceSettings() {
       <SettingsRow
         icon={Palette}
         title="Theme"
-        description="Choose the appearance used on this device."
       >
         <fieldset className="theme-segmented" disabled={isSaving}>
           <legend className="sr-only">Theme preference</legend>

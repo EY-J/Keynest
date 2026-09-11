@@ -49,7 +49,7 @@ export async function mount(relative, props, dependencies = {}, environment = {}
   const file = new URL(relative, import.meta.url);
   const { code } = await transformWithOxc(await readFile(file, "utf8"), file.pathname);
   const module = new vm.SourceTextModule(code, { context });
-  const modalFile = new URL("../src/shared/components/Modal/Modal.tsx", import.meta.url);
+  const modalFile = new URL("../src/components/ui/Modal/Modal.tsx", import.meta.url);
   const modalCode = (await transformWithOxc(await readFile(modalFile, "utf8"), modalFile.pathname)).code;
   const modalModule = new vm.SourceTextModule(modalCode, { context });
   await module.link(specifier => {

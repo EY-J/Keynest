@@ -7,6 +7,8 @@ import {
   Settings,
   Star,
 } from "lucide-react";
+import ProfileAvatar from "../../features/profile/ProfileAvatar";
+import type { Profile } from "../../features/profile/profileTypes";
 
 type NavigationSidebarProps = {
   isOpen: boolean;
@@ -14,6 +16,7 @@ type NavigationSidebarProps = {
   onClose(): void;
   onNavigate(destination: "home" | "vault" | "favorites" | "settings"): void;
   onLockKeynest(): Promise<void>;
+  profile: Profile;
 };
 
 export default function NavigationSidebar({
@@ -22,11 +25,8 @@ export default function NavigationSidebar({
   onClose,
   onNavigate,
   onLockKeynest,
+  profile,
 }: NavigationSidebarProps) {
-  function navigate(destination: "home" | "vault" | "favorites" | "settings") {
-    onNavigate(destination);
-  }
-
   function lockKeynest() {
     onClose();
     void onLockKeynest();
@@ -41,10 +41,9 @@ export default function NavigationSidebar({
       aria-hidden={!isOpen}
     >
       <div className="sidebar-profile">
-        <div className="sidebar-avatar">AJ</div>
-
+        <ProfileAvatar avatarUrl={profile.avatarDataUrl} className="sidebar-avatar" />
         <div className="sidebar-profile-details">
-          <strong>KeyNest User</strong>
+          <strong>{profile.displayName}</strong>
           <span>Local account</span>
         </div>
       </div>
@@ -61,7 +60,7 @@ export default function NavigationSidebar({
             }`}
             type="button"
             aria-current={activeDestination === "home" ? "page" : undefined}
-            onClick={() => navigate("home")}
+            onClick={() => onNavigate("home")}
           >
             <House className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Home</span>
@@ -73,7 +72,7 @@ export default function NavigationSidebar({
             }`}
             type="button"
             aria-current={activeDestination === "vault" ? "page" : undefined}
-            onClick={() => navigate("vault")}
+            onClick={() => onNavigate("vault")}
           >
             <KeyRound className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Vault</span>
@@ -106,7 +105,7 @@ export default function NavigationSidebar({
             }`}
             type="button"
             aria-current={activeDestination === "favorites" ? "page" : undefined}
-            onClick={() => navigate("favorites")}
+            onClick={() => onNavigate("favorites")}
           >
             <Star className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Favorites</span>
@@ -121,7 +120,7 @@ export default function NavigationSidebar({
           }`}
           type="button"
           aria-current={activeDestination === "settings" ? "page" : undefined}
-          onClick={() => navigate("settings")}
+          onClick={() => onNavigate("settings")}
         >
           <Settings className="sidebar-link-icon" size={20} aria-hidden="true" />
           <span className="sidebar-link-label">Settings</span>

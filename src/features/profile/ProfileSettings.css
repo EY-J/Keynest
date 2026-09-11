@@ -1,0 +1,245 @@
+.profile-settings {
+  width: min(100%, 700px);
+}
+
+.profile-settings-panel {
+  padding: 23px;
+  border: 1px solid var(--kn-border);
+  border-radius: 12px;
+  background: var(--kn-surface);
+}
+
+.profile-settings-photo {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.profile-settings-photo-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.profile-settings-avatar {
+  width: 60px;
+  height: 60px;
+  flex: 0 0 auto;
+  border: 1px solid var(--kn-border-strong);
+  border-radius: 50%;
+  background: var(--kn-accent-soft);
+  object-fit: cover;
+}
+
+.profile-settings-photo-identity h2 {
+  margin: 0;
+  color: var(--kn-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.profile-settings-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.profile-settings-remove-button {
+  border-color: var(--kn-border-strong);
+  background: transparent;
+  color: var(--kn-muted);
+}
+
+.profile-settings-remove-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--kn-danger) 45%, var(--kn-border));
+  color: var(--kn-danger);
+}
+
+.profile-settings-name {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.profile-settings-name > label {
+  color: var(--kn-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.profile-settings-name-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-settings-name input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--kn-border);
+  border-radius: 9px;
+  outline: 0;
+  background: var(--kn-surface-raised);
+  color: var(--kn-text);
+  font: inherit;
+  font-weight: 400;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.profile-settings-name input:focus {
+  border-color: var(--kn-border-strong);
+  box-shadow: 0 0 0 3px var(--kn-accent-soft);
+}
+
+.profile-settings-message {
+  margin: 8px 0 0;
+  font-size: var(--text-secondary);
+}
+
+.profile-settings-message.error {
+  color: var(--kn-danger);
+}
+
+.settings-page :is(.profile-settings-change-photo, .profile-settings-save) {
+  width: auto;
+  min-width: 130px;
+  height: 40px;
+  min-height: 40px;
+  padding-inline: 18px;
+}
+
+.profile-save-toast {
+  position: fixed;
+  z-index: 1200;
+  right: 24px;
+  bottom: 24px;
+  width: min(260px, calc(100vw - 48px));
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--kn-border);
+  border-radius: 10px;
+  background: var(--kn-surface-raised);
+  color: var(--kn-text);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--kn-bg) 55%, transparent);
+  pointer-events: none;
+}
+
+.profile-save-toast.is-success {
+  border-color: color-mix(in srgb, var(--kn-accent) 34%, var(--kn-border));
+}
+
+.profile-save-toast.is-error {
+  border-color: color-mix(in srgb, var(--kn-danger) 42%, var(--kn-border));
+}
+
+.profile-save-toast strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.profile-save-toast span {
+  color: var(--kn-muted);
+  font-size: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.profile-save-toast.is-visible {
+  animation: profile-save-toast-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.profile-save-toast.is-exiting {
+  animation: profile-save-toast-exit 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes profile-save-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes profile-save-toast-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+@media (max-width: 620px) {
+  .profile-settings-panel {
+    padding: 20px;
+  }
+
+  .profile-settings-photo {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .profile-settings-photo-actions {
+    justify-content: flex-start;
+  }
+
+  .profile-settings-name-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-settings-save {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 420px) {
+  .profile-settings-panel {
+    padding: 16px;
+  }
+
+  .profile-save-toast {
+    right: 12px;
+    bottom: 12px;
+    width: min(260px, calc(100vw - 24px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-save-toast.is-visible {
+    animation: profile-save-toast-fade-in 60ms linear both;
+  }
+
+  .profile-save-toast.is-exiting {
+    animation: profile-save-toast-fade-out 60ms linear both;
+  }
+}
+
+@keyframes profile-save-toast-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes profile-save-toast-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

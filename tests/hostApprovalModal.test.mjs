@@ -23,17 +23,17 @@ async function fixture() {
     },
   };
   const component = await mount(
-    "../src/features/autofill/HostApprovalModal.tsx",
+    "../src/features/autofill/components/HostApprovalModal.tsx",
     {},
     {
       "@tauri-apps/api/event": {
         listen: async (_name, handler) => { eventHandler = handler; return () => {}; },
       },
-      "./hostApprovalClient": {
+      "../hostApprovalClient": {
         hostApprovalClient: client,
         HostApprovalClientError: class extends Error {},
       },
-      "../../shared/components/ServiceIcon": { default: "ServiceIcon" },
+      "../../../components/ui/ServiceLogo": { default: "ServiceLogo" },
     },
   );
   return { ...component, calls, event: () => eventHandler?.() };
@@ -42,13 +42,13 @@ async function fixture() {
 test("approval notifications are subscribed before the initial pending-state read", async () => {
   const order = [];
   const component = await mount(
-    "../src/features/autofill/HostApprovalModal.tsx",
+    "../src/features/autofill/components/HostApprovalModal.tsx",
     {},
     {
       "@tauri-apps/api/event": {
         listen: async () => { order.push("listen"); return () => {}; },
       },
-      "./hostApprovalClient": {
+      "../hostApprovalClient": {
         hostApprovalClient: {
           pending: async () => { order.push("pending"); return null; },
           candidates: async () => [],
@@ -57,7 +57,7 @@ test("approval notifications are subscribed before the initial pending-state rea
         },
         HostApprovalClientError: class extends Error {},
       },
-      "../../shared/components/ServiceIcon": { default: "ServiceIcon" },
+      "../../../components/ui/ServiceLogo": { default: "ServiceLogo" },
     },
   );
   assert.deepEqual(order.slice(0, 2), ["listen", "pending"]);

@@ -1,11 +1,11 @@
 import { type FormEvent, type RefObject, useEffect, useRef, useState } from "react";
-import MasterPasswordStrength from "../../../shared/components/MasterPasswordStrength";
-import type { VaultRecord, VaultRecordInput } from "../types";
-import { generateAdvancedPassword } from "./PasswordGenerator";
+import PasswordStrengthMeter from "../../../components/ui/PasswordStrengthMeter";
+import type { Credential, CredentialInput } from "../types";
+import { generateAdvancedPassword } from "../passwordGenerator";
 
-type VaultRecordFormProps = {
-  initialRecord?: VaultRecord;
-  onSubmit: (input: VaultRecordInput) => Promise<void>;
+type CredentialFormProps = {
+  initialRecord?: Credential;
+  onSubmit: (input: CredentialInput) => Promise<void>;
   onCancel: () => void;
   onPendingChange?: (isPending: boolean) => void;
   initialFocusRef?: RefObject<HTMLInputElement | null>;
@@ -107,13 +107,13 @@ function SparkleIcon() {
 
 // ── Form component ───────────────────────────────────────────────────────────
 
-export default function VaultRecordForm({
+export default function CredentialForm({
   initialRecord,
   onSubmit,
   onCancel,
   onPendingChange,
   initialFocusRef,
-}: VaultRecordFormProps) {
+}: CredentialFormProps) {
   const [name, setName] = useState(initialRecord?.name ?? "");
   const [username, setUsername] = useState(initialRecord?.username ?? "");
   const [password, setPassword] = useState(initialRecord?.password ?? "");
@@ -206,6 +206,7 @@ export default function VaultRecordForm({
         <label htmlFor="vault-name">Name</label>
         <input
           id="vault-name"
+          className="vault-form-input"
           ref={initialFocusRef}
           placeholder="e.g. Google Account"
           value={name}
@@ -224,6 +225,7 @@ export default function VaultRecordForm({
         <label htmlFor="vault-username">Username or email</label>
         <input
           id="vault-username"
+          className="vault-form-input"
           placeholder="e.g. user@example.com"
           value={username}
           onChange={(event) => setUsername(event.target.value)}
@@ -247,6 +249,7 @@ export default function VaultRecordForm({
         <div className="vault-password-input-row">
           <input
             id="vault-password"
+            className="vault-form-input"
             type={showPassword ? "text" : "password"}
             placeholder="Enter your password"
             value={password}
@@ -288,12 +291,13 @@ export default function VaultRecordForm({
         ) : null}
 
         {/* Informational only: weak saved credentials are still allowed. */}
-        {password && <MasterPasswordStrength password={password} />}
+        {password && <PasswordStrengthMeter password={password} />}
         </div>
 
         <label className="vault-form-website">
         <span>Website (optional)</span>
         <input
+          className="vault-form-input"
           type="text"
           inputMode="url"
           placeholder="e.g. https://google.com"
@@ -305,6 +309,7 @@ export default function VaultRecordForm({
         <label className="vault-form-tags">
         <span>Tags (comma-separated)</span>
         <input
+          className="vault-form-input"
           placeholder="e.g. work, personal"
           value={tags}
           onChange={(event) => setTags(event.target.value)}

@@ -2,10 +2,10 @@ import { type FormEvent, useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
 import { authClient } from "../../auth/authClient";
 import PasswordField from "../../auth/components/PasswordField";
-import { RecoveryKeyContent } from "../../auth/components/RecoveryKeyScreen";
+import { RecoveryKeyConfirmation } from "../../auth/components/RecoveryKeyScreen";
 import { AuthClientError } from "../../auth/types";
 import SettingsRow from "./SettingsRow";
-import Modal, { useModalClose } from "../../../shared/components/Modal/Modal";
+import Modal, { useModalClose } from "../../../components/ui/Modal/Modal";
 
 export default function RecoverySettings() {
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -121,7 +121,7 @@ export default function RecoverySettings() {
                 : "Verify your Master Password"}
             </h2>
             {recoveryKey ? (
-              <RecoveryKeyContent
+              <RecoveryKeyConfirmation
                 recoveryKey={recoveryKey}
                 previousKeyInvalid={replacedExistingKey}
                 onSaved={async () => {

@@ -5,8 +5,8 @@ import PasswordField from "../../auth/components/PasswordField";
 import { AuthClientError } from "../../auth/types";
 import SettingsRow from "./SettingsRow";
 import { validateMasterPassword } from "../../../shared/security/masterPasswordPolicy";
-import MasterPasswordStrength from "../../../shared/components/MasterPasswordStrength";
-import Modal, { ModalCloseButton, useModalClose } from "../../../shared/components/Modal/Modal";
+import PasswordStrengthMeter from "../../../components/ui/PasswordStrengthMeter";
+import Modal, { ModalCloseButton, useModalClose } from "../../../components/ui/Modal/Modal";
 import "./ChangeMasterPasswordForm.css";
 
 const SUCCESS_MESSAGE =
@@ -131,7 +131,7 @@ export default function ChangeMasterPasswordForm() {
                 autoComplete="new-password"
                 disabled={isSubmitting || isClosing}
               />
-              <MasterPasswordStrength password={newPassword} />
+              <PasswordStrengthMeter password={newPassword} />
             </div>
             <div className="master-password-field-feedback">
               <PasswordField

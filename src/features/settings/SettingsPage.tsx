@@ -1,11 +1,14 @@
 import { useRef, useState } from "react";
-import { Info, Palette, Shield, Settings } from "lucide-react";
-import AboutSettings from "../features/settings/components/AboutSettings";
-import AppearanceSettings from "../features/settings/components/AppearanceSettings";
-import GeneralSettings from "../features/settings/components/GeneralSettings";
-import SecuritySettings from "../features/settings/components/SecuritySettings";
+import { Info, Palette, Shield, Settings, UserRound } from "lucide-react";
+import ProfileSettings from "../profile/ProfileSettings";
+import type { Profile } from "../profile/profileTypes";
+import AboutSettings from "./components/AboutSettings";
+import AppearanceSettings from "./components/AppearanceSettings";
+import GeneralSettings from "./components/GeneralSettings";
+import SecuritySettings from "./components/SecuritySettings";
 
 export type SettingsCategory =
+  | "profile"
   | "security"
   | "general"
   | "appearance"
@@ -18,8 +21,15 @@ const CATEGORIES: Array<{
   icon: typeof Shield;
 }> = [
   {
+    id: "profile",
+    label: "Profile",
+    description: "Manage your local profile.",
+    icon: UserRound,
+  },
+  {
     id: "security",
     label: "Security",
+    description: "Manage how KeyNest protects your vault.",
     icon: Shield,
   },
   {
@@ -43,6 +53,8 @@ const CATEGORIES: Array<{
 ];
 
 type SettingsPageProps = {
+  profile: Profile;
+  onProfileSaved(profile: Profile): void;
   onResetAuthenticated: (
     currentPassword: string,
     confirmation: "RESET KEYNEST",
@@ -50,11 +62,14 @@ type SettingsPageProps = {
 };
 
 export default function SettingsPage({
+  profile,
+  onProfileSaved,
   onResetAuthenticated,
 }: SettingsPageProps) {
   const [activeCategory, setActiveCategory] =
-    useState<SettingsCategory>("security");
+    useState<SettingsCategory>("profile");
   const tabRefs = useRef<Record<SettingsCategory, HTMLButtonElement | null>>({
+    profile: null,
     security: null,
     general: null,
     appearance: null,
@@ -116,10 +131,12 @@ export default function SettingsPage({
           aria-labelledby={`${category.id}-tab`}
         >
           <header className="settings-section-header">
-            <p className="settings-kicker">SETTINGS</p>
             <h1>{category.label}</h1>
             {category.description ? <p>{category.description}</p> : null}
           </header>
+          {category.id === "profile" ? (
+            <ProfileSettings profile={profile} onSaved={onProfileSaved} />
+          ) : null}
           {category.id === "security" ? (
             <SecuritySettings onResetAuthenticated={onResetAuthenticated} />
           ) : null}

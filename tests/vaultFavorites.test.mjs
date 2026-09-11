@@ -4,9 +4,9 @@ import test from "node:test";
 import vm from "node:vm";
 import { transformWithOxc } from "vite";
 
-async function favoriteStore(initialValue = null) {
+async function credentialFavorites(initialValue = null) {
   let stored = initialValue;
-  const file = new URL("../src/features/vault/favoriteStore.ts", import.meta.url);
+  const file = new URL("../src/features/vault/credentialFavorites.ts", import.meta.url);
   const { code } = await transformWithOxc(await readFile(file, "utf8"), file.pathname);
   const context = vm.createContext({
     window: {
@@ -23,20 +23,20 @@ async function favoriteStore(initialValue = null) {
 }
 
 test("favorite IDs toggle through one immutable set and persist", async () => {
-  const f = await favoriteStore();
-  const first = f.api.toggledFavoriteRecordIds(new Set(), "record-a");
-  assert.deepEqual([...first], ["record-a"]);
-  const second = f.api.toggledFavoriteRecordIds(first, "record-a");
+  const f = await credentialFavorites();
+  const first = f.api.toggleFavoriteCredentialId(new Set(), "credential-a");
+  assert.deepEqual([...first], ["credential-a"]);
+  const second = f.api.toggleFavoriteCredentialId(first, "credential-a");
   assert.deepEqual([...second], []);
 
-  f.api.saveFavoriteRecordIds(first);
-  assert.deepEqual(JSON.parse(f.stored()), ["record-a"]);
+  f.api.saveFavoriteCredentialIds(first);
+  assert.deepEqual(JSON.parse(f.stored()), ["credential-a"]);
 });
 
 test("favorite persistence rejects malformed and oversized identifiers", async () => {
-  const malformed = await favoriteStore("not-json");
-  assert.deepEqual([...malformed.api.loadFavoriteRecordIds()], []);
+  const malformed = await credentialFavorites("not-json");
+  assert.deepEqual([...malformed.api.loadFavoriteCredentialIds()], []);
 
-  const mixed = await favoriteStore(JSON.stringify(["valid-id", "", 42, "x".repeat(129)]));
-  assert.deepEqual([...mixed.api.loadFavoriteRecordIds()], ["valid-id"]);
+  const mixed = await credentialFavorites(JSON.stringify(["valid-id", "", 42, "x".repeat(129)]));
+  assert.deepEqual([...mixed.api.loadFavoriteCredentialIds()], ["valid-id"]);
 });

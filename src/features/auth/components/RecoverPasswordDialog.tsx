@@ -1,8 +1,8 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { ChevronRight, KeyRound, TriangleAlert } from "lucide-react";
-import Modal, { ModalCloseButton, useModalClose } from "../../../shared/components/Modal/Modal";
+import Modal, { ModalCloseButton, useModalClose } from "../../../components/ui/Modal/Modal";
 import { validateMasterPassword } from "../../../shared/security/masterPasswordPolicy";
-import MasterPasswordStrength from "../../../shared/components/MasterPasswordStrength";
+import PasswordStrengthMeter from "../../../components/ui/PasswordStrengthMeter";
 import { authClient } from "../authClient";
 import { AuthClientError, type RecoveryKeyResult } from "../types";
 import PasswordField from "./PasswordField";
@@ -155,7 +155,7 @@ export default function RecoverPasswordDialog({
                 autoComplete="new-password"
                 disabled={isSubmitting}
               />
-              <MasterPasswordStrength password={newPassword} />
+              <PasswordStrengthMeter password={newPassword} />
             </div>
             <PasswordField
               label="Confirm new Master Password"

@@ -38,7 +38,7 @@ for (const event of ["blur", "visibilitychange"]) {
   });
 }
 
-test("close/reopen, record switch and lock/navigation unmount discard reveal timers", async () => {
+test("close/reopen, credential switch and lock/navigation unmount discard reveal timers", async () => {
   const f = await vaultFixture();
   await f.click("Reveal password");
   await f.click("Close credential");
@@ -46,7 +46,7 @@ test("close/reopen, record switch and lock/navigation unmount discard reveal tim
   const reopened = await vaultFixture();
   assert.equal(reopened.password().type, "password");
   await reopened.click("Reveal password");
-  reopened.props.recordId = "b"; reopened.render(); await reopened.flush();
+  reopened.props.credentialId = "b"; reopened.render(); await reopened.flush();
   assert.equal(reopened.password().type, "password");
   assert.equal(reopened.timers.size, 0);
   await reopened.click("Reveal password");
@@ -57,12 +57,12 @@ test("close/reopen, record switch and lock/navigation unmount discard reveal tim
 });
 
 test("editor auto-masks and cleans its timer while preserving editable password", async () => {
-  const f = await mount("../src/features/vault/components/VaultRecordForm.tsx", {
+  const f = await mount("../src/features/vault/components/CredentialForm.tsx", {
     initialRecord: { ...summary("a"), password: "editable-secret" },
     onSubmit: async () => {}, onCancel() {},
   }, {
-    "./PasswordGenerator": { generateAdvancedPassword: () => "generated-fixture" },
-    "../../../shared/components/MasterPasswordStrength": { default: "MasterPasswordStrength" },
+    "../passwordGenerator": { generateAdvancedPassword: () => "generated-fixture" },
+    "../../../components/ui/PasswordStrengthMeter": { default: "PasswordStrengthMeter" },
   });
   const toggle = () => f.find(n => n.props["aria-label"] === "Show password").props.onClick();
   const password = () => f.find(n => n.props.id === "vault-password").props;

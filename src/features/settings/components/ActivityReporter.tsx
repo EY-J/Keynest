@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { SettingsClientError } from "./types";
-import { settingsClient } from "./settingsClient";
+import { SettingsClientError } from "../types";
+import { settingsClient } from "../settingsClient";
 
 const ACTIVITY_THROTTLE_MS = 5_000;
 const ACTIVITY_ERROR = "KeyNest could not record recent activity.";

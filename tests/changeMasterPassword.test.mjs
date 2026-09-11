@@ -15,10 +15,10 @@ async function compile(relative) {
   return (await transformWithOxc(await readFile(file, "utf8"), file.pathname)).code;
 }
 const estimatorCode = await compile("../src/shared/security/passwordStrength.ts");
-const indicatorCode = await compile("../src/shared/components/MasterPasswordStrength.tsx");
+const indicatorCode = await compile("../src/components/ui/PasswordStrengthMeter.tsx");
 const setupCode = await compile("../src/features/auth/components/SetupScreen.tsx");
 const recoveryCode = await compile("../src/features/auth/components/RecoverPasswordDialog.tsx");
-const modalCode = await compile("../src/shared/components/Modal/Modal.tsx");
+const modalCode = await compile("../src/components/ui/Modal/Modal.tsx");
 const unlockCode = await compile("../src/features/auth/components/UnlockScreen.tsx");
 
 async function fixture(changePassword = async () => "unlocked", flow = "change") {
@@ -111,10 +111,10 @@ async function fixture(changePassword = async () => "unlocked", flow = "change")
   modules["./PasswordField"] = { default: "PasswordField" };
   modules["./AuthLayout"] = { default: "AuthLayout" };
   modules["./RecoveryKeyScreen"] = { default: "RecoveryKeyScreen" };
-  modules["./ResetDialog"] = { default: "ResetDialog" };
+  modules["./UnauthenticatedResetDialog"] = { default: "UnauthenticatedResetDialog" };
   modules["./RecoverPasswordDialog"] = { default: "RecoverPasswordDialog" };
   modules["./LockScreenBackground"] = { default: "LockScreenBackground" };
-  modules["./MasterPasswordStrength.css"] = {};
+  modules["./PasswordStrengthMeter.css"] = {};
   const source = flow === "setup" ? setupCode : flow === "recovery" ? recoveryCode : flow === "unlock" ? unlockCode : code;
   const module = new vm.SourceTextModule(source, { context });
   const modalModule = new vm.SourceTextModule(modalCode, { context });
@@ -125,7 +125,7 @@ async function fixture(changePassword = async () => "unlocked", flow = "change")
     if (specifier.endsWith("/Modal/Modal")) return modalModule;
     if (specifier.endsWith("/masterPasswordPolicy")) return policyModule;
     if (specifier === "./passwordStrength") return estimatorModule;
-    if (specifier.endsWith("/MasterPasswordStrength")) return indicatorModule;
+    if (specifier.endsWith("/PasswordStrengthMeter")) return indicatorModule;
     assert.ok(specifier in modules, `Unexpected dependency: ${specifier}`);
     const exports = modules[specifier];
     return new vm.SyntheticModule(Object.keys(exports), function () {

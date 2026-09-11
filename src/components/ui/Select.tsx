@@ -9,14 +9,14 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, X } from "lucide-react";
-import "./keynest-select.css";
+import "./select.css";
 
 export interface SelectOption {
   value: string;
   label: string;
 }
 
-type KeyNestSelectProps = {
+type SelectProps = {
   value: string;
   options: SelectOption[];
   onChange(value: string): void;
@@ -45,7 +45,7 @@ const MENU_PADDING = 6;
 const OPTION_HEIGHT = 36;
 const MAX_MENU_HEIGHT = 252;
 
-export default function KeyNestSelect({
+export default function Select({
   value,
   options,
   onChange,
@@ -58,7 +58,7 @@ export default function KeyNestSelect({
   className = "",
   menuClassName = "",
   id,
-}: KeyNestSelectProps) {
+}: SelectProps) {
   const generatedId = useId();
   const selectId = id ?? `keynest-select-${generatedId}`;
   const listboxId = `${selectId}-listbox`;

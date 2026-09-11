@@ -1,6 +1,6 @@
 import { useState } from "react";
 import AuthLayout from "./AuthLayout";
-import ResetDialog from "./ResetDialog";
+import UnauthenticatedResetDialog from "./UnauthenticatedResetDialog";
 
 type DataErrorScreenProps = {
   onRetry: () => Promise<void>;
@@ -49,7 +49,7 @@ export default function DataErrorScreen({
         </button>
       </div>
 
-      <ResetDialog
+      <UnauthenticatedResetDialog
         isOpen={isResetOpen}
         onClose={() => setIsResetOpen(false)}
         onReset={onReset}

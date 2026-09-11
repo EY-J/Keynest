@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Clipboard, Lock, Monitor, Trash2 } from "lucide-react";
-import KeyNestSelect from "../../../shared/components/KeyNestSelect";
+import Select from "../../../components/ui/Select";
 import { useSettings } from "../SettingsProvider";
 import type { AutoLockSeconds, ClipboardClearSeconds } from "../types";
 import AuthenticatedResetDialog from "./AuthenticatedResetDialog";
@@ -89,8 +89,10 @@ export default function SecuritySettings({
             <label className="sr-only" htmlFor="auto-lock-seconds">
               Auto Lock duration
             </label>
-            <KeyNestSelect
+            <Select
               id="auto-lock-seconds"
+              className="settings-time-select"
+              menuClassName="settings-time-select-menu"
               value={String(settings.autoLockSeconds)}
               ariaLabel="Auto Lock duration"
               disabled={isSaving["auto-lock"]}
@@ -120,8 +122,10 @@ export default function SecuritySettings({
             <label className="sr-only" htmlFor="clipboard-clear-seconds">
               Clipboard clearing delay
             </label>
-            <KeyNestSelect
+            <Select
               id="clipboard-clear-seconds"
+              className="settings-time-select"
+              menuClassName="settings-time-select-menu"
               value={String(settings.clipboardClearSeconds)}
               ariaLabel="Clipboard clearing delay"
               disabled={isSaving.clipboard}

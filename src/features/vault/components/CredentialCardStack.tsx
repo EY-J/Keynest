@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Star } from "lucide-react";
-import ServiceIcon from "../../../shared/components/ServiceIcon";
-import type { VaultRecordSummary } from "../types";
+import ServiceLogo from "../../../components/ui/ServiceLogo";
+import type { CredentialSummary } from "../types";
 
-type VaultCardStackProps = {
-  records: VaultRecordSummary[];
-  favoriteRecordIds: ReadonlySet<string>;
-  onOpenRecord(recordId: string): void;
-  onToggleFavorite(recordId: string): void;
+type CredentialCardStackProps = {
+  credentials: CredentialSummary[];
+  favoriteCredentialIds: ReadonlySet<string>;
+  onOpenCredential(credentialId: string): void;
+  onToggleFavorite(credentialId: string): void;
 };
 
 function getStackOffset(index: number, activeIndex: number, count: number) {
@@ -16,46 +16,46 @@ function getStackOffset(index: number, activeIndex: number, count: number) {
   return Math.abs(forward) <= Math.abs(backward) ? forward : backward;
 }
 
-export default function VaultCardStack({
-  records,
-  favoriteRecordIds,
-  onOpenRecord,
+export default function CredentialCardStack({
+  credentials,
+  favoriteCredentialIds,
+  onOpenCredential,
   onToggleFavorite,
-}: VaultCardStackProps) {
-  const [focusedId, setFocusedId] = useState(records[0]?.id ?? "");
+}: CredentialCardStackProps) {
+  const [focusedId, setFocusedId] = useState(credentials[0]?.id ?? "");
 
   useEffect(() => {
-    if (!records.some((record) => record.id === focusedId)) {
-      setFocusedId(records[0]?.id ?? "");
+    if (!credentials.some((credential) => credential.id === focusedId)) {
+      setFocusedId(credentials[0]?.id ?? "");
     }
-  }, [focusedId, records]);
+  }, [credentials, focusedId]);
 
   const activeIndex = Math.max(
     0,
-    records.findIndex((record) => record.id === focusedId),
+    credentials.findIndex((credential) => credential.id === focusedId),
   );
 
   const visibleCards = useMemo(
     () =>
-      records
-        .map((record, index) => ({
-          record,
+      credentials
+        .map((credential, index) => ({
+          credential,
           index,
-          offset: getStackOffset(index, activeIndex, records.length),
+          offset: getStackOffset(index, activeIndex, credentials.length),
         }))
         .filter(({ offset }) => Math.abs(offset) <= 3),
-    [activeIndex, records],
+    [activeIndex, credentials],
   );
 
   function moveFocus(direction: -1 | 1) {
-    const nextIndex = (activeIndex + direction + records.length) % records.length;
-    setFocusedId(records[nextIndex].id);
+    const nextIndex = (activeIndex + direction + credentials.length) % credentials.length;
+    setFocusedId(credentials[nextIndex].id);
   }
 
   return (
     <section className="vault-stack-view" aria-label="Credentials in Card Stack View">
       <div className="vault-stack-stage">
-        {records.length > 1 ? (
+        {credentials.length > 1 ? (
           <button
             className="vault-stack-arrow vault-stack-arrow-left"
             type="button"
@@ -67,35 +67,35 @@ export default function VaultCardStack({
         ) : null}
 
         <div className="vault-stack-cards">
-          {visibleCards.map(({ record, index, offset }) => {
+          {visibleCards.map(({ credential, index, offset }) => {
             const isFocused = index === activeIndex;
             const position = offset < 0 ? `n${Math.abs(offset)}` : `p${offset}`;
-            const tag = record.tags[0] || "Credential";
-            const isFavorite = favoriteRecordIds.has(record.id);
+            const tag = credential.tags[0] || "Credential";
+            const isFavorite = favoriteCredentialIds.has(credential.id);
 
             return (
               <article
                 className={`vault-stack-card vault-stack-position-${position}${
                   isFocused ? " focused" : ""
                 }`}
-                key={record.id}
+                key={credential.id}
               >
                 <button
                   className="vault-stack-card-open"
                   type="button"
-                  aria-label={`${isFocused ? "Open" : "Focus"} ${record.name}`}
+                  aria-label={`${isFocused ? "Open" : "Focus"} ${credential.name}`}
                   aria-current={isFocused ? "true" : undefined}
                   onClick={() => {
-                    if (isFocused) onOpenRecord(record.id);
-                    else setFocusedId(record.id);
+                    if (isFocused) onOpenCredential(credential.id);
+                    else setFocusedId(credential.id);
                   }}
                 >
                   <span className="vault-card-topline">
-                    <ServiceIcon name={record.name} website={record.website} />
+                    <ServiceLogo name={credential.name} website={credential.website} />
                   </span>
                   <span className="vault-card-copy">
-                    <strong>{record.name}</strong>
-                    <span>{record.username}</span>
+                    <strong>{credential.name}</strong>
+                    <span>{credential.username}</span>
                   </span>
                   <span className="vault-tag-chip">{tag}</span>
                 </button>
@@ -104,11 +104,11 @@ export default function VaultCardStack({
                     isFavorite ? " active" : ""
                   }`}
                   type="button"
-                  aria-label={`${isFavorite ? "Remove" : "Add"} ${record.name} ${
+                  aria-label={`${isFavorite ? "Remove" : "Add"} ${credential.name} ${
                     isFavorite ? "from" : "to"
                   } favorites`}
                   aria-pressed={isFavorite}
-                  onClick={() => onToggleFavorite(record.id)}
+                  onClick={() => onToggleFavorite(credential.id)}
                 >
                   <Star size={19} fill={isFavorite ? "currentColor" : "none"} aria-hidden="true" />
                 </button>
@@ -117,7 +117,7 @@ export default function VaultCardStack({
           })}
         </div>
 
-        {records.length > 1 ? (
+        {credentials.length > 1 ? (
           <button
             className="vault-stack-arrow vault-stack-arrow-right"
             type="button"
@@ -129,16 +129,16 @@ export default function VaultCardStack({
         ) : null}
       </div>
 
-      {records.length > 1 ? (
+      {credentials.length > 1 ? (
         <div className="vault-stack-pagination" aria-label="Choose credential">
-          {records.map((record, index) => (
+          {credentials.map((credential, index) => (
             <button
               className={index === activeIndex ? "active" : ""}
-              key={record.id}
+              key={credential.id}
               type="button"
-              aria-label={`Show ${record.name}`}
+              aria-label={`Show ${credential.name}`}
               aria-current={index === activeIndex ? "true" : undefined}
-              onClick={() => setFocusedId(record.id)}
+              onClick={() => setFocusedId(credential.id)}
             />
           ))}
         </div>

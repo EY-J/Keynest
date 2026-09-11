@@ -2,14 +2,14 @@ import { type RefObject, useEffect, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Eye, EyeOff, Link2, LockKeyhole, Pencil, Star, Trash2, UserRound } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { vaultClient } from "../vaultClient";
-import type { VaultRecord, VaultRecordInput, VaultRecordSummary } from "../types";
+import type { Credential, CredentialInput, CredentialSummary } from "../types";
 import VaultModal from "./VaultModal";
-import { ModalCloseButton, useModalClose } from "../../../shared/components/Modal/Modal";
-import ServiceIcon from "../../../shared/components/ServiceIcon";
-import VaultRecordForm from "./VaultRecordForm";
+import { ModalCloseButton, useModalClose } from "../../../components/ui/Modal/Modal";
+import ServiceLogo from "../../../components/ui/ServiceLogo";
+import CredentialForm from "./CredentialForm";
 
-type VaultRecordDialogProps = {
-  recordId: string;
+type CredentialDetailsModalProps = {
+  credentialId: string;
   isFavorite: boolean;
   onClose: () => void;
   onChanged: () => Promise<void>;
@@ -38,16 +38,18 @@ function safeWebUrl(value: string) {
   }
 }
 
-export default function VaultRecordDialog({
-  recordId,
+export default function CredentialDetailsModal({
+  credentialId,
   isFavorite,
   onClose,
   onChanged,
   onToggleFavorite,
   fallbackFocusRef,
-}: VaultRecordDialogProps) {
-  const [record, setRecord] = useState<VaultRecordSummary | null>(null);
-  const [editRecord, setEditRecord] = useState<VaultRecord | null>(null);
+}: CredentialDetailsModalProps) {
+  const [credentialSummary, setCredentialSummary] =
+    useState<CredentialSummary | null>(null);
+  const [credentialForEditing, setCredentialForEditing] =
+    useState<Credential | null>(null);
   const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -62,11 +64,11 @@ export default function VaultRecordDialog({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const editNameRef = useRef<HTMLInputElement>(null);
   const deleteConfirmationRef = useRef<HTMLInputElement>(null);
-  const generationRef = useRef(0);
+  const requestGenerationRef = useRef(0);
   const revealRequestRef = useRef(0);
   const usernameCopyFeedbackTimerRef = useRef<number | null>(null);
-  const copyFeedbackTimerRef = useRef<number | null>(null);
-  const modal = useModalClose(finishClose);
+  const passwordCopyFeedbackTimerRef = useRef<number | null>(null);
+  const modalClose = useModalClose(finishClosingModal);
 
   useEffect(() => {
     function hide() {
@@ -83,29 +85,29 @@ export default function VaultRecordDialog({
       window.removeEventListener("blur", hide);
       document.removeEventListener("visibilitychange", hideWhenBackgrounded);
     };
-  }, [recordId]);
+  }, [credentialId]);
 
   useEffect(() => {
     if (revealedPassword === null) return;
     const timer = window.setTimeout(() => setRevealedPassword(null), 12_000);
     return () => window.clearTimeout(timer);
-  }, [revealedPassword, recordId]);
+  }, [credentialId, revealedPassword]);
 
   useEffect(
     () => () => {
       if (usernameCopyFeedbackTimerRef.current !== null) {
         window.clearTimeout(usernameCopyFeedbackTimerRef.current);
       }
-      if (copyFeedbackTimerRef.current !== null) {
-        window.clearTimeout(copyFeedbackTimerRef.current);
+      if (passwordCopyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(passwordCopyFeedbackTimerRef.current);
       }
     },
     [],
   );
 
   useEffect(() => {
-    const generation = ++generationRef.current;
-    setRecord(null);
+    const generation = ++requestGenerationRef.current;
+    setCredentialSummary(null);
     setError("");
     setStatus("");
     setIsUsernameCopied(false);
@@ -114,41 +116,41 @@ export default function VaultRecordDialog({
       window.clearTimeout(usernameCopyFeedbackTimerRef.current);
       usernameCopyFeedbackTimerRef.current = null;
     }
-    if (copyFeedbackTimerRef.current !== null) {
-      window.clearTimeout(copyFeedbackTimerRef.current);
-      copyFeedbackTimerRef.current = null;
+    if (passwordCopyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(passwordCopyFeedbackTimerRef.current);
+      passwordCopyFeedbackTimerRef.current = null;
     }
     setIsLoading(true);
     setRevealedPassword(null);
-    setEditRecord(null);
+    setCredentialForEditing(null);
     setIsEditing(false);
     setIsDeleting(false);
     setDeleteConfirmation("");
     setIsPending(false);
     void vaultClient
-      .getVaultRecordSummary(recordId)
+      .getCredentialSummary(credentialId)
       .then(
         (loaded) => {
-          if (generationRef.current === generation) {
-            setRecord(loaded);
+          if (requestGenerationRef.current === generation) {
+            setCredentialSummary(loaded);
           }
         },
         () => {
-          if (generationRef.current === generation) {
+          if (requestGenerationRef.current === generation) {
             setError("KeyNest could not load this credential.");
           }
         },
       )
       .finally(() => {
-        if (generationRef.current === generation) {
+        if (requestGenerationRef.current === generation) {
           setIsLoading(false);
         }
       });
     return () => {
       // Lock/navigation unmounts this dialog; late IPC responses must stay discarded.
-      generationRef.current += 1;
+      requestGenerationRef.current += 1;
     };
-  }, [recordId]);
+  }, [credentialId]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -160,78 +162,78 @@ export default function VaultRecordDialog({
     });
   }, [isDeleting, isEditing]);
 
-  function close() {
-    if (!isPending) modal.close();
+  function closeModal() {
+    if (!isPending) modalClose.close();
   }
 
-  function finishClose() {
-    generationRef.current += 1;
-    setRecord(null);
+  function finishClosingModal() {
+    requestGenerationRef.current += 1;
+    setCredentialSummary(null);
     setRevealedPassword(null);
-    setEditRecord(null);
+    setCredentialForEditing(null);
     onClose();
   }
 
-  async function loadSecret(purpose: "reveal" | "edit") {
+  async function loadCredentialSecret(purpose: "reveal" | "edit") {
     if (isPending) return;
     if (purpose === "reveal" && isRevealed) {
       setRevealedPassword(null);
       return;
     }
-    const generation = generationRef.current;
+    const generation = requestGenerationRef.current;
     const revealRequest = ++revealRequestRef.current;
     setRevealedPassword(null);
     setError("");
     setIsPending(true);
     try {
-      const loaded = await vaultClient.getVaultRecord(recordId);
-      if (generationRef.current !== generation || loaded.id !== recordId) return;
+      const loaded = await vaultClient.getCredential(credentialId);
+      if (requestGenerationRef.current !== generation || loaded.id !== credentialId) return;
       if (purpose === "edit") {
-        setEditRecord(loaded);
+        setCredentialForEditing(loaded);
         setIsEditing(true);
       } else if (revealRequestRef.current === revealRequest && !document.hidden) {
         setRevealedPassword(loaded.password);
       }
     } catch {
-      if (generationRef.current === generation) setError("KeyNest could not load this credential.");
+      if (requestGenerationRef.current === generation) setError("KeyNest could not load this credential.");
     } finally {
-      if (generationRef.current === generation) setIsPending(false);
+      if (requestGenerationRef.current === generation) setIsPending(false);
     }
   }
 
   async function copyPassword() {
-    const generation = generationRef.current;
-    if (copyFeedbackTimerRef.current !== null) {
-      window.clearTimeout(copyFeedbackTimerRef.current);
-      copyFeedbackTimerRef.current = null;
+    const generation = requestGenerationRef.current;
+    if (passwordCopyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(passwordCopyFeedbackTimerRef.current);
+      passwordCopyFeedbackTimerRef.current = null;
     }
     setIsPasswordCopied(false);
     setError("");
     setStatus("");
     setIsPending(true);
     try {
-      await vaultClient.copyVaultPassword(recordId);
-      if (generationRef.current === generation) {
+      await vaultClient.copyCredentialPassword(credentialId);
+      if (requestGenerationRef.current === generation) {
         setStatus("Password copied securely.");
         setIsPasswordCopied(true);
-        copyFeedbackTimerRef.current = window.setTimeout(() => {
-          copyFeedbackTimerRef.current = null;
+        passwordCopyFeedbackTimerRef.current = window.setTimeout(() => {
+          passwordCopyFeedbackTimerRef.current = null;
           setIsPasswordCopied(false);
         }, 1_200);
       }
     } catch {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setError("KeyNest could not copy this password.");
       }
     } finally {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setIsPending(false);
       }
     }
   }
 
   async function copyUsername() {
-    const generation = generationRef.current;
+    const generation = requestGenerationRef.current;
     if (usernameCopyFeedbackTimerRef.current !== null) {
       window.clearTimeout(usernameCopyFeedbackTimerRef.current);
       usernameCopyFeedbackTimerRef.current = null;
@@ -241,8 +243,8 @@ export default function VaultRecordDialog({
     setStatus("");
     setIsPending(true);
     try {
-      await vaultClient.copyVaultUsername(recordId);
-      if (generationRef.current === generation) {
+      await vaultClient.copyCredentialUsername(credentialId);
+      if (requestGenerationRef.current === generation) {
         setStatus("Username copied securely.");
         setIsUsernameCopied(true);
         usernameCopyFeedbackTimerRef.current = window.setTimeout(() => {
@@ -251,19 +253,19 @@ export default function VaultRecordDialog({
         }, 1_200);
       }
     } catch {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setError("KeyNest could not copy this username.");
       }
     } finally {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setIsPending(false);
       }
     }
   }
 
   async function openWebsite() {
-    if (!record?.website) return;
-    const url = safeWebUrl(record.website);
+    if (!credentialSummary?.website) return;
+    const url = safeWebUrl(credentialSummary.website);
     setError("");
     setStatus("");
     if (!url) {
@@ -271,72 +273,72 @@ export default function VaultRecordDialog({
       return;
     }
 
-    const generation = generationRef.current;
+    const generation = requestGenerationRef.current;
     setIsPending(true);
     try {
       await openUrl(url);
     } catch {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setError("KeyNest could not open this website.");
       }
     } finally {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setIsPending(false);
       }
     }
   }
 
-  async function update(input: VaultRecordInput) {
-    const generation = generationRef.current;
+  async function updateCredential(input: CredentialInput) {
+    const generation = requestGenerationRef.current;
     setError("");
-    await vaultClient.updateVaultRecord(recordId, input);
-    if (generationRef.current !== generation) {
+    await vaultClient.updateCredential(credentialId, input);
+    if (requestGenerationRef.current !== generation) {
       return;
     }
     await onChanged();
-    if (generationRef.current !== generation) {
+    if (requestGenerationRef.current !== generation) {
       return;
     }
-    modal.close();
+    modalClose.close();
   }
 
-  async function remove() {
-    if (!record || deleteConfirmation !== record.name) {
+  async function deleteCredential() {
+    if (!credentialSummary || deleteConfirmation !== credentialSummary.name) {
       return;
     }
-    const generation = generationRef.current;
+    const generation = requestGenerationRef.current;
     setError("");
     setIsPending(true);
     try {
-      await vaultClient.deleteVaultRecord(recordId);
-      if (generationRef.current !== generation) {
+      await vaultClient.deleteCredential(credentialId);
+      if (requestGenerationRef.current !== generation) {
         return;
       }
       await onChanged();
-      if (generationRef.current !== generation) {
+      if (requestGenerationRef.current !== generation) {
         return;
       }
-      modal.close();
+      modalClose.close();
     } catch {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setError("KeyNest could not delete this credential.");
       }
     } finally {
-      if (generationRef.current === generation) {
+      if (requestGenerationRef.current === generation) {
         setIsPending(false);
       }
     }
   }
 
-  const title = record?.name ?? "Credential";
+  const title = credentialSummary?.name ?? "Credential";
   return (
     <VaultModal
       titleId="vault-record-dialog-title"
       className={isEditing ? "add-credential-dialog edit-credential-dialog" : ""}
       width={isEditing ? 640 : 620}
-      closing={modal.closing}
-      onExitComplete={modal.finishClose}
-      onRequestClose={close}
+      closing={modalClose.closing}
+      onExitComplete={modalClose.finishClose}
+      onRequestClose={closeModal}
       isDismissDisabled={isPending}
       initialFocusRef={closeButtonRef}
       fallbackFocusRef={fallbackFocusRef}
@@ -347,23 +349,23 @@ export default function VaultRecordDialog({
             <p className="eyebrow">PASSWORD VAULT</p>
             <h2 id="vault-record-dialog-title">Edit credential</h2>
           </div>
-          <ModalCloseButton buttonRef={closeButtonRef} label="Close credential" onClick={close} disabled={isPending || modal.closing} />
+          <ModalCloseButton buttonRef={closeButtonRef} label="Close credential" onClick={closeModal} disabled={isPending || modalClose.closing} />
         </header>
       ) : (
         <header className="vault-dialog-title vault-credential-header">
           <div className="vault-credential-kicker-row">
             <p className="eyebrow">PASSWORD VAULT</p>
-            <ModalCloseButton buttonRef={closeButtonRef} label="Close credential" onClick={close} disabled={isPending || modal.closing} />
+            <ModalCloseButton buttonRef={closeButtonRef} label="Close credential" onClick={closeModal} disabled={isPending || modalClose.closing} />
           </div>
-          {record && !isDeleting ? (
+          {credentialSummary && !isDeleting ? (
             <div className="vault-credential-identity">
-              <ServiceIcon name={record.name} website={record.website} size="large" />
+              <ServiceLogo name={credentialSummary.name} website={credentialSummary.website} size="large" />
               <div className="vault-credential-identity-copy">
-                <h2 id="vault-record-dialog-title">{record.name}</h2>
-                {record.tags.length ? (
+                <h2 id="vault-record-dialog-title">{credentialSummary.name}</h2>
+                {credentialSummary.tags.length ? (
                   <div className="vault-credential-tags" aria-label="Credential tags">
-                    {record.tags.map((item) => (
-                      <span className="vault-credential-tag" key={item}>{item}</span>
+                    {credentialSummary.tags.map((tag) => (
+                      <span className="vault-credential-tag" key={tag}>{tag}</span>
                     ))}
                   </div>
                 ) : null}
@@ -400,7 +402,7 @@ export default function VaultRecordDialog({
                     type="button"
                     aria-label="Edit credential"
                     title="Edit credential"
-                    onClick={() => void loadSecret("edit")}
+                    onClick={() => void loadCredentialSecret("edit")}
                     disabled={isPending}
                   >
                     <Pencil size={17} aria-hidden="true" />
@@ -420,8 +422,8 @@ export default function VaultRecordDialog({
                   </button>
                 </div>
                 <div className="vault-credential-dates">
-                  <span>Added {formatDetailDate(record.createdAtMs)}</span>
-                  <span>Last updated {formatDetailDate(record.updatedAtMs)}</span>
+                  <span>Added {formatDetailDate(credentialSummary.createdAtMs)}</span>
+                  <span>Last updated {formatDetailDate(credentialSummary.updatedAtMs)}</span>
                 </div>
               </div>
             </div>
@@ -445,22 +447,22 @@ export default function VaultRecordDialog({
           {status}
         </p>
       ) : null}
-      {editRecord && isEditing ? (
-        <VaultRecordForm
-          initialRecord={editRecord}
-          onSubmit={update}
-          onCancel={() => { setIsEditing(false); setEditRecord(null); }}
+      {credentialForEditing && isEditing ? (
+        <CredentialForm
+          initialRecord={credentialForEditing}
+          onSubmit={updateCredential}
+          onCancel={() => { setIsEditing(false); setCredentialForEditing(null); }}
           onPendingChange={setIsPending}
           initialFocusRef={editNameRef}
         />
       ) : null}
-      {record && !isEditing && !isDeleting ? (
+      {credentialSummary && !isEditing && !isDeleting ? (
         <div className="vault-record-detail">
           <div className="vault-detail-row">
             <UserRound className="vault-detail-row-icon" size={21} aria-hidden="true" />
             <div className="vault-detail-row-copy">
               <span>Username / Email</span>
-              <strong>{record.username}</strong>
+              <strong>{credentialSummary.username}</strong>
             </div>
             <button
               className="vault-field-action"
@@ -477,12 +479,12 @@ export default function VaultRecordDialog({
               )}
             </button>
           </div>
-          {record.website ? (
+          {credentialSummary.website ? (
             <div className="vault-detail-row">
               <Link2 className="vault-detail-row-icon" size={21} aria-hidden="true" />
               <div className="vault-detail-row-copy">
                 <span>Website</span>
-                <strong>{record.website}</strong>
+                <strong>{credentialSummary.website}</strong>
               </div>
               <button
                 className="vault-field-action"
@@ -514,7 +516,7 @@ export default function VaultRecordDialog({
                 type="button"
                 aria-label={isRevealed ? "Hide password" : "Reveal password"}
                 title={isRevealed ? "Hide password" : "Reveal password"}
-                onClick={() => void loadSecret("reveal")}
+                onClick={() => void loadCredentialSecret("reveal")}
                 disabled={isPending}
               >
                 {isRevealed ? (
@@ -541,15 +543,15 @@ export default function VaultRecordDialog({
           </div>
         </div>
       ) : null}
-      {record && isDeleting ? (
+      {credentialSummary && isDeleting ? (
         <section
           className="vault-delete-confirmation"
           aria-labelledby="delete-credential-title"
         >
-          <h3 id="delete-credential-title">Delete {record.name} permanently?</h3>
+          <h3 id="delete-credential-title">Delete {credentialSummary.name} permanently?</h3>
           <p>This action cannot be undone.</p>
           <label>
-            <span>Type {record.name} to confirm</span>
+            <span>Type {credentialSummary.name} to confirm</span>
             <input
               ref={deleteConfirmationRef}
               value={deleteConfirmation}
@@ -577,8 +579,8 @@ export default function VaultRecordDialog({
             <button
               className="vault-danger-button"
               type="button"
-              onClick={() => void remove()}
-              disabled={isPending || deleteConfirmation !== record.name}
+              onClick={() => void deleteCredential()}
+              disabled={isPending || deleteConfirmation !== credentialSummary.name}
             >
               Delete Credential
             </button>

@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { transformWithOxc } from "vite";
 
 async function loadSiteIdentity() {
-  const file = new URL("../src/shared/siteIdentity.ts", import.meta.url);
+  const file = new URL("../src/utils/serviceIdentity.ts", import.meta.url);
   const source = await readFile(file, "utf8");
   const { code } = await transformWithOxc(source, file.pathname);
   const context = vm.createContext({ URL });
@@ -52,10 +52,10 @@ test("unknown and lookalike domains keep the monogram fallback", async () => {
 
 test("recognized services use local color images without CSS recoloring", async () => {
   const component = await readFile(
-    new URL("../src/shared/components/ServiceIcon.tsx", import.meta.url),
+    new URL("../src/components/ui/ServiceLogo.tsx", import.meta.url),
     "utf8",
   );
-  const css = await readFile(new URL("../src/App.css", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/styles/globals.css", import.meta.url), "utf8");
   const serviceStyles = css.slice(
     css.indexOf(".service-icon {"),
     css.indexOf(".vault-card-copy {"),

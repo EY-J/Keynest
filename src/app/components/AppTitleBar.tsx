@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import BrandMark from "./BrandMark";
+import BrandMark from "../../components/ui/BrandMark";
 
 type AppTitleBarProps = {
   isNavigationOpen?: boolean;

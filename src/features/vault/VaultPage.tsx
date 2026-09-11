@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import VaultModal from "../features/vault/components/VaultModal";
-import { ModalCloseButton, useModalClose } from "../shared/components/Modal/Modal";
-import VaultRecordDialog from "../features/vault/components/VaultRecordDialog";
-import VaultRecordForm from "../features/vault/components/VaultRecordForm";
-import VaultCardStack from "../features/vault/components/VaultCardStack";
-import VaultListView from "../features/vault/components/VaultListView";
+import VaultModal from "./components/VaultModal";
+import { ModalCloseButton, useModalClose } from "../../components/ui/Modal/Modal";
+import CredentialDetailsModal from "./components/CredentialDetailsModal";
+import CredentialForm from "./components/CredentialForm";
+import CredentialCardStack from "./components/CredentialCardStack";
+import CredentialList from "./components/CredentialList";
 import VaultToolbar, {
   type VaultViewMode,
-} from "../features/vault/components/VaultToolbar";
-import { vaultClient } from "../features/vault/vaultClient";
-import type { VaultRecordInput, VaultRecordSummary } from "../features/vault/types";
+} from "./components/VaultToolbar";
+import { vaultClient } from "./vaultClient";
+import type { CredentialInput, CredentialSummary } from "./types";
 
 const LOAD_ERROR_MESSAGE = "KeyNest could not load your vault.";
 const VAULT_VIEW_PREFERENCE_KEY = "keynest:vault-view";
@@ -26,46 +26,46 @@ function getInitialViewMode(): VaultViewMode {
   }
 }
 
-function normalized(value: string) {
+function normalizeSearchText(value: string) {
   return value.trim().toLocaleLowerCase();
 }
 
-type PasswordVaultPageProps = {
-  favoriteRecordIds: ReadonlySet<string>;
+type VaultPageProps = {
+  favoriteCredentialIds: ReadonlySet<string>;
   favoritesOnly?: boolean;
-  onToggleFavorite(recordId: string): void;
+  onToggleFavorite(credentialId: string): void;
 };
 
-export default function PasswordVaultPage({
-  favoriteRecordIds,
+export default function VaultPage({
+  favoriteCredentialIds,
   favoritesOnly = false,
   onToggleFavorite,
-}: PasswordVaultPageProps) {
-  const [records, setRecords] = useState<VaultRecordSummary[]>([]);
+}: VaultPageProps) {
+  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
   const [viewMode, setViewMode] = useState<VaultViewMode>(getInitialViewMode);
-  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [selectedCredentialId, setSelectedCredentialId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isAddingPending, setIsAddingPending] = useState(false);
-  const listRequestId = useRef(0);
-  const addGeneration = useRef(0);
+  const loadRequestId = useRef(0);
+  const addDialogGeneration = useRef(0);
   const addNameRef = useRef<HTMLInputElement>(null);
   const addButtonRef = useRef<HTMLButtonElement>(null);
 
   async function loadRecords() {
-    const requestId = ++listRequestId.current;
+    const requestId = ++loadRequestId.current;
     setIsLoading(true);
     setLoadError("");
     try {
-      const loaded = await vaultClient.listVaultRecords();
-      if (listRequestId.current === requestId) setRecords(loaded);
+      const loaded = await vaultClient.listCredentials();
+      if (loadRequestId.current === requestId) setCredentials(loaded);
     } catch {
-      if (listRequestId.current === requestId) setLoadError(LOAD_ERROR_MESSAGE);
+      if (loadRequestId.current === requestId) setLoadError(LOAD_ERROR_MESSAGE);
     } finally {
-      if (listRequestId.current === requestId) setIsLoading(false);
+      if (loadRequestId.current === requestId) setIsLoading(false);
     }
   }
 
@@ -81,45 +81,45 @@ export default function PasswordVaultPage({
     }
   }, [viewMode]);
 
-  const availableRecords = useMemo(
+  const availableCredentials = useMemo(
     () =>
       favoritesOnly
-        ? records.filter((record) => favoriteRecordIds.has(record.id))
-        : records,
-    [favoriteRecordIds, favoritesOnly, records],
+        ? credentials.filter((credential) => favoriteCredentialIds.has(credential.id))
+        : credentials,
+    [credentials, favoriteCredentialIds, favoritesOnly],
   );
   const tags = useMemo(
-    () => [...new Set(availableRecords.flatMap((record) => record.tags))].sort(),
-    [availableRecords],
+    () => [...new Set(availableCredentials.flatMap((credential) => credential.tags))].sort(),
+    [availableCredentials],
   );
-  const filteredRecords = useMemo(() => {
-    const query = normalized(search);
-    const selectedTag = normalized(tag);
+  const filteredCredentials = useMemo(() => {
+    const query = normalizeSearchText(search);
+    const selectedTag = normalizeSearchText(tag);
 
-    return availableRecords.filter((record) => {
-      const searchValues = [record.name, record.username, record.website ?? "", ...record.tags];
+    return availableCredentials.filter((credential) => {
+      const searchValues = [credential.name, credential.username, credential.website ?? "", ...credential.tags];
       const matchesSearch =
-        !query || searchValues.some((value) => normalized(value).includes(query));
+        !query || searchValues.some((value) => normalizeSearchText(value).includes(query));
       return (
         matchesSearch &&
-        (!selectedTag || record.tags.some((value) => normalized(value) === selectedTag))
+        (!selectedTag || credential.tags.some((value) => normalizeSearchText(value) === selectedTag))
       );
     });
-  }, [availableRecords, search, tag]);
+  }, [availableCredentials, search, tag]);
 
   const addModal = useModalClose(() => {
-    addGeneration.current += 1;
+    addDialogGeneration.current += 1;
     setIsAdding(false);
   });
 
-  async function createRecord(input: VaultRecordInput) {
-    const generation = addGeneration.current;
-    await vaultClient.createVaultRecord(input);
-    if (addGeneration.current !== generation) {
+  async function createCredential(input: CredentialInput) {
+    const generation = addDialogGeneration.current;
+    await vaultClient.createCredential(input);
+    if (addDialogGeneration.current !== generation) {
       return;
     }
     await loadRecords();
-    if (addGeneration.current !== generation) {
+    if (addDialogGeneration.current !== generation) {
       return;
     }
     setIsAddingPending(false);
@@ -127,7 +127,7 @@ export default function PasswordVaultPage({
   }
 
   function openAddDialog() {
-    addGeneration.current += 1;
+    addDialogGeneration.current += 1;
     setIsAddingPending(false);
     setIsAdding(true);
   }
@@ -148,8 +148,8 @@ export default function PasswordVaultPage({
           </p>
           <h1>{favoritesOnly ? "Favorites" : "Vault"}</h1>
           <p>
-            {availableRecords.length}{" "}
-            {availableRecords.length === 1 ? "credential" : "credentials"}
+            {availableCredentials.length}{" "}
+            {availableCredentials.length === 1 ? "credential" : "credentials"}
           </p>
         </div>
         <VaultToolbar
@@ -178,7 +178,7 @@ export default function PasswordVaultPage({
           </button>
         </section>
       ) : null}
-      {!isLoading && !loadError && records.length === 0 ? (
+      {!isLoading && !loadError && credentials.length === 0 ? (
         <section className="vault-empty-state">
           <h2>No credentials yet</h2>
           <p>Add your first credential to keep it protected in KeyNest.</p>
@@ -190,8 +190,8 @@ export default function PasswordVaultPage({
       {!isLoading &&
       !loadError &&
       favoritesOnly &&
-      records.length > 0 &&
-      availableRecords.length === 0 ? (
+      credentials.length > 0 &&
+      availableCredentials.length === 0 ? (
         <section className="vault-empty-state">
           <h2>No favorite credentials</h2>
           <p>Use the Star on a credential to add it here.</p>
@@ -199,23 +199,23 @@ export default function PasswordVaultPage({
       ) : null}
       {!isLoading &&
       !loadError &&
-      availableRecords.length > 0 &&
-      filteredRecords.length === 0 ? (
+      availableCredentials.length > 0 &&
+      filteredCredentials.length === 0 ? (
         <p className="vault-status">No matching credentials</p>
       ) : null}
-      {!isLoading && !loadError && filteredRecords.length > 0 ? (
+      {!isLoading && !loadError && filteredCredentials.length > 0 ? (
         viewMode === "card" ? (
-          <VaultCardStack
-            records={filteredRecords}
-            favoriteRecordIds={favoriteRecordIds}
-            onOpenRecord={setSelectedRecordId}
+          <CredentialCardStack
+            credentials={filteredCredentials}
+            favoriteCredentialIds={favoriteCredentialIds}
+            onOpenCredential={setSelectedCredentialId}
             onToggleFavorite={onToggleFavorite}
           />
         ) : (
-          <VaultListView
-            records={filteredRecords}
-            favoriteRecordIds={favoriteRecordIds}
-            onOpenRecord={setSelectedRecordId}
+          <CredentialList
+            credentials={filteredCredentials}
+            favoriteCredentialIds={favoriteCredentialIds}
+            onOpenCredential={setSelectedCredentialId}
             onToggleFavorite={onToggleFavorite}
           />
         )
@@ -239,22 +239,22 @@ export default function PasswordVaultPage({
             </div>
             <ModalCloseButton label="Close credential" onClick={closeAddDialog} disabled={isAddingPending || addModal.closing} />
           </header>
-          <VaultRecordForm
-            onSubmit={createRecord}
+          <CredentialForm
+            onSubmit={createCredential}
             onCancel={closeAddDialog}
             onPendingChange={setIsAddingPending}
             initialFocusRef={addNameRef}
           />
         </VaultModal>
       ) : null}
-      {selectedRecordId ? (
-        <VaultRecordDialog
-          key={selectedRecordId}
-          recordId={selectedRecordId}
-          isFavorite={favoriteRecordIds.has(selectedRecordId)}
-          onClose={() => setSelectedRecordId(null)}
+      {selectedCredentialId ? (
+        <CredentialDetailsModal
+          key={selectedCredentialId}
+          credentialId={selectedCredentialId}
+          isFavorite={favoriteCredentialIds.has(selectedCredentialId)}
+          onClose={() => setSelectedCredentialId(null)}
           onChanged={loadRecords}
-          onToggleFavorite={() => onToggleFavorite(selectedRecordId)}
+          onToggleFavorite={() => onToggleFavorite(selectedCredentialId)}
           fallbackFocusRef={addButtonRef}
         />
       ) : null}

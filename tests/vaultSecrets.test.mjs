@@ -118,19 +118,19 @@ test("reveal is selected-record-only and hiding releases plaintext state", async
 test("editing fetches only the selected record and cancel discards it", async () => {
   const f = await vaultFixture();
   await f.click("Edit credential");
-  const form = f.find(n => n.type === "VaultRecordForm");
+  const form = f.find(n => n.type === "CredentialForm");
   assert.equal(form.props.initialRecord.password, "fixture-secret-a");
   form.props.onCancel(); await f.flush();
-  assert.ok(!f.find(n => n.type === "VaultRecordForm"));
+  assert.ok(!f.find(n => n.type === "CredentialForm"));
   assert.ok(!JSON.stringify(f.tree()).includes("fixture-secret"));
   f.unmount();
 });
 
-test("a stale secret response cannot enter a different record dialog", async () => {
+test("a stale secret response cannot enter a different credential dialog", async () => {
   const pending = deferred();
   const f = await vaultFixture(() => pending.promise);
   await f.click("Reveal password");
-  f.props.recordId = "b"; f.render(); await f.flush();
+  f.props.credentialId = "b"; f.render(); await f.flush();
   pending.resolve({ ...summary("a"), password: "stale-secret" }); await f.flush();
   assert.equal(f.password().type, "password");
   assert.ok(!JSON.stringify(f.tree()).includes("stale-secret"));

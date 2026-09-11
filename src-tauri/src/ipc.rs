@@ -16,6 +16,7 @@ use crate::{
         PendingHostApprovalView,
     },
     platform::startup::{StartupError, StartupService},
+    profile::{AvatarUpdate, ProfileError, ProfileService, ProfileSnapshot},
     security::{
         AuthError, AuthService, AuthStatus, AutoLockService, ClipboardError, ClipboardService,
         LockError, RecoveryStatus, SecurityOperationGate,
@@ -194,6 +195,40 @@ impl From<SettingsError> for PublicIpcError {
             SettingsError::Storage(_) => Self::new(
                 "settings-error",
                 "KeyNest could not save the settings change.",
+            ),
+        }
+    }
+}
+
+impl From<ProfileError> for PublicIpcError {
+    fn from(error: ProfileError) -> Self {
+        match error {
+            ProfileError::InvalidDisplayName => {
+                Self::new("invalid-display-name", "Enter a display name.")
+            }
+            ProfileError::DisplayNameTooLong => Self::new(
+                "display-name-too-long",
+                "Display name must be 50 characters or fewer.",
+            ),
+            ProfileError::ImageTooLarge => Self::new(
+                "profile-image-too-large",
+                "Choose an image no larger than 5 MB.",
+            ),
+            ProfileError::UnsupportedImage | ProfileError::ImageTypeMismatch => Self::new(
+                "unsupported-profile-image",
+                "Choose a PNG, JPG, or WEBP image.",
+            ),
+            ProfileError::InvalidImageDimensions => Self::new(
+                "invalid-profile-image-dimensions",
+                "Choose an image no larger than 4096 pixels on either side.",
+            ),
+            ProfileError::InvalidImage => Self::new(
+                "invalid-profile-image",
+                "KeyNest could not read that image.",
+            ),
+            ProfileError::Serialization(_) | ProfileError::Storage(_) => Self::new(
+                "profile-storage-error",
+                "KeyNest could not save the local profile.",
             ),
         }
     }
@@ -982,6 +1017,32 @@ pub(crate) async fn lock(
         let guard = operation_gate.lock();
         auto_lock
             .lock_now_with_operation_guard(&guard)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn get_profile(
+    profile: State<'_, ProfileService>,
+) -> Result<ProfileSnapshot, PublicIpcError> {
+    let profile = profile.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || profile.snapshot().map_err(Into::into))
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn save_profile(
+    display_name: String,
+    avatar_update: AvatarUpdate,
+    profile: State<'_, ProfileService>,
+) -> Result<ProfileSnapshot, PublicIpcError> {
+    let profile = profile.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profile
+            .save(display_name, avatar_update)
             .map_err(Into::into)
     })
     .await
