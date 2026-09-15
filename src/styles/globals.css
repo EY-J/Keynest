@@ -859,6 +859,33 @@ time {
   gap: 18px;
 }
 
+.auth-content:has(> .auth-setup-form) .auth-mark {
+  margin-bottom: 24px;
+}
+
+.auth-content:has(> .auth-setup-form) .auth-eyebrow {
+  margin-bottom: 8px;
+}
+
+.auth-content:has(> .auth-setup-form) h1 {
+  margin-bottom: 11px;
+  font-size: 28px;
+}
+
+.auth-content:has(> .auth-setup-form) .auth-description {
+  margin-bottom: 26px;
+}
+
+.auth-setup-form,
+.auth-setup-form .auth-requirement,
+.auth-setup-form .auth-warning {
+  text-align: left;
+}
+
+.auth-setup-form .auth-submit {
+  text-align: center;
+}
+
 .auth-pin-form,
 .auth-master-form {
   max-width: 100%;
@@ -1149,7 +1176,6 @@ time {
 }
 
 .recovery-choice-list > p,
-.recovery-copy-status,
 .recovery-key-guidance {
   margin: 0;
   color: var(--kn-muted);
@@ -1199,10 +1225,6 @@ time {
 
 .recovery-copy-button {
   justify-self: center;
-}
-
-.recovery-copy-status {
-  font-size: 0.78rem;
 }
 
 .recovery-key-guidance {
@@ -2005,6 +2027,10 @@ footer {
     margin-bottom: 20px;
   }
 
+  .auth-content:has(> .auth-setup-form) .auth-mark {
+    margin-bottom: 20px;
+  }
+
   .auth-content h1 {
     margin-bottom: 10px;
     font-size: var(--text-page-title);
@@ -2014,6 +2040,10 @@ footer {
     margin-bottom: 22px;
     font-size: var(--text-body);
     line-height: 1.45;
+  }
+
+  .auth-content:has(> .auth-setup-form) .auth-description {
+    margin-bottom: 22px;
   }
 
   .auth-form {
@@ -2122,13 +2152,21 @@ footer {
     margin-bottom: 16px;
   }
 
+  .auth-content:has(> .auth-setup-form) .auth-mark {
+    margin-bottom: 16px;
+  }
+
   .auth-content h1 {
     font-size: var(--text-page-title);
   }
 
   .auth-description {
-  line-height: 1.45;
-  font-size: var(--text-body);
+    line-height: 1.45;
+    font-size: var(--text-body);
+    margin-bottom: 18px;
+  }
+
+  .auth-content:has(> .auth-setup-form) .auth-description {
     margin-bottom: 18px;
   }
 
@@ -3345,8 +3383,9 @@ footer {
 .recently-deleted-search {
   display: flex;
   align-items: center;
-  width: min(525px, 100%);
-  flex: 0 1 525px;
+  width: min(340px, 100%);
+  max-width: 340px;
+  flex: 0 1 340px;
   height: 42px;
   padding: 0 13px;
   border: 1px solid var(--kn-border);
@@ -3507,12 +3546,18 @@ footer {
 }
 
 .recently-deleted-empty-state {
-  display: grid;
-  place-items: center;
-  gap: 7px;
-  min-height: 300px;
+  display: flex;
+  width: min(360px, 100%);
+  margin-inline: auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   color: var(--kn-muted);
   text-align: center;
+}
+
+.recently-deleted-empty-state > svg {
+  margin-bottom: 5px;
 }
 
 .recently-deleted-empty-state h2,

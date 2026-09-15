@@ -374,6 +374,14 @@ test("shared password-policy vectors match the reused Vault estimate", async () 
   }
 });
 
+test("setup reuses the unlock screen background implementation", async () => {
+  const f = await fixture(undefined, "setup");
+  const layout = f.find(node => node.type === "AuthLayout");
+  assert.equal(layout.props.background.type, "LockScreenBackground");
+  assert.equal(layout.props.background.props.paused, false);
+  assert.equal(f.find(node => node.type === "form").props.className, "auth-form auth-setup-form");
+});
+
 for (const flow of ["setup", "recovery"]) {
   test(`${flow}: shared policy blocks weak, short, empty and mismatched passwords`, async () => {
     const f = await fixture(undefined, flow);

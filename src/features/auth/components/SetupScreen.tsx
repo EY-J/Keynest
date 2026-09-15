@@ -4,6 +4,7 @@ import PasswordStrengthMeter from "../../../components/ui/PasswordStrengthMeter"
 import { authClient } from "../authClient";
 import { AuthClientError } from "../types";
 import AuthLayout from "./AuthLayout";
+import LockScreenBackground from "./LockScreenBackground";
 import PasswordField from "./PasswordField";
 import RecoveryKeyScreen from "./RecoveryKeyScreen";
 
@@ -79,8 +80,9 @@ export default function SetupScreen({ onCreated }: SetupScreenProps) {
       eyebrow="FIRST-TIME SETUP"
       title="Create your master password"
       description="This password unlocks your encrypted KeyNest data on this device."
+      background={<LockScreenBackground paused={false} />}
     >
-      <form className="auth-form" onSubmit={(event) => void submit(event)}>
+      <form className="auth-form auth-setup-form" onSubmit={(event) => void submit(event)}>
         <div className="master-password-field-feedback">
           <PasswordField
             label="Master password"

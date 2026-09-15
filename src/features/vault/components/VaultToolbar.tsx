@@ -99,7 +99,7 @@ export default function VaultToolbar({
         onClick={onAddCredential}
       >
         <Plus size={15} strokeWidth={2.4} aria-hidden="true" />
-        Add Credential
+        New
       </button>
     </div>
   );

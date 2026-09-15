@@ -3,11 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("Recently Deleted is universal, searchable, and uses shared modal styling", async () => {
-  const [page, client, dialog, sidebar] = await Promise.all([
+  const [page, client, dialog, sidebar, css] = await Promise.all([
     readFile(new URL("../src/features/recently-deleted/RecentlyDeletedPage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/features/recently-deleted/recentlyDeletedClient.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/features/recently-deleted/ConfirmPermanentDeleteDialog.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/app/components/NavigationSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles/globals.css", import.meta.url), "utf8"),
   ]);
 
   assert.match(sidebar, /Quick Access[\s\S]*Favorites[\s\S]*Recently Deleted/);
@@ -18,7 +19,11 @@ test("Recently Deleted is universal, searchable, and uses shared modal styling",
   assert.doesNotMatch(page, /recently-deleted-heading[\s\S]*Empty Recently Deleted/);
   assert.match(page, /allVisibleSelected[\s\S]*Deselect all/);
   assert.match(page, /className="recently-deleted-row-select"/);
-  assert.match(page, /Recently Deleted is empty/);
+  assert.match(page, /<Trash2 size=\{32\}[\s\S]*No deleted items[\s\S]*Deleted items will appear here for 30 days\./);
+  assert.doesNotMatch(page, /Recently Deleted is empty/);
+  assert.match(css, /\.recently-deleted-search\s*\{[^}]*width:\s*min\(340px,\s*100%\);[^}]*max-width:\s*340px;[^}]*flex:\s*0 1 340px;/s);
+  assert.match(css, /\.recently-deleted-empty-state\s*\{[^}]*width:\s*min\(360px,\s*100%\);[^}]*margin-inline:\s*auto;[^}]*align-items:\s*center;[^}]*text-align:\s*center;/s);
+  assert.doesNotMatch(css, /\.recently-deleted-empty-state\s*\{[^}]*min-height:\s*300px;/s);
   assert.match(page, /Credential[\s\S]*Note/);
   assert.match(page, /Item restored/);
   assert.match(page, /Recently Deleted emptied/);

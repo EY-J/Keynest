@@ -25,6 +25,7 @@ pub(crate) struct ProfileSnapshot {
     pub display_name: String,
     pub avatar_data_url: Option<String>,
     pub has_custom_avatar: bool,
+    pub is_configured: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -68,7 +69,7 @@ impl ProfileService {
     ) -> Result<ProfileSnapshot, ProfileError> {
         let _operation = self.lock_operation();
         let display_name = validate_display_name(display_name)?;
-        let current = self.store.load_metadata()?;
+        let (current, _) = self.store.load_metadata()?;
 
         match avatar_update {
             AvatarUpdate::Keep => {
@@ -119,6 +120,11 @@ impl ProfileService {
         }
 
         self.store.snapshot()
+    }
+
+    pub(crate) fn reset(&self) -> Result<(), ProfileError> {
+        let _operation = self.lock_operation();
+        self.store.reset()
     }
 
     fn lock_operation(&self) -> MutexGuard<'_, ()> {
@@ -263,23 +269,23 @@ impl ProfileStore {
         }
     }
 
-    fn load_metadata(&self) -> Result<StoredProfile, ProfileError> {
+    fn load_metadata(&self) -> Result<(StoredProfile, bool), ProfileError> {
         let bytes = match fs::read(self.metadata_path()) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(StoredProfile::default())
+                return Ok((StoredProfile::default(), false))
             }
             Err(error) => return Err(ProfileError::Storage(error)),
         };
         let stored: StoredProfile = match serde_json::from_slice::<StoredProfile>(&bytes) {
             Ok(stored) if stored.is_valid() => stored,
-            _ => return Ok(StoredProfile::default()),
+            _ => return Ok((StoredProfile::default(), false)),
         };
-        Ok(stored)
+        Ok((stored, true))
     }
 
     fn snapshot(&self) -> Result<ProfileSnapshot, ProfileError> {
-        let stored = self.load_metadata()?;
+        let (stored, is_configured) = self.load_metadata()?;
         let avatar = stored
             .avatar_file
             .as_deref()
@@ -295,6 +301,7 @@ impl ProfileStore {
             display_name: stored.display_name,
             has_custom_avatar: avatar_data_url.is_some(),
             avatar_data_url,
+            is_configured,
         })
     }
 
@@ -339,6 +346,21 @@ impl ProfileStore {
         match fs::remove_file(self.profile_dir.join(file_name)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(ProfileError::Storage(error)),
+        }
+    }
+
+    fn reset(&self) -> Result<(), ProfileError> {
+        match fs::remove_file(self.metadata_path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ProfileError::Storage(error)),
+        }
+        self.remove_managed_avatars_except(None)?;
+        match fs::remove_dir(&self.profile_dir) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => Ok(()),
             Err(error) => Err(ProfileError::Storage(error)),
         }
     }
@@ -417,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_profile_uses_default_name_and_no_custom_avatar() {
+    fn missing_profile_is_reported_as_not_configured() {
         let temp = tempfile::tempdir().unwrap();
         let service = ProfileService::new(temp.path().to_path_buf());
         assert_eq!(
@@ -426,6 +448,7 @@ mod tests {
                 display_name: DEFAULT_DISPLAY_NAME.to_owned(),
                 avatar_data_url: None,
                 has_custom_avatar: false,
+                is_configured: false,
             }
         );
     }
@@ -446,6 +469,22 @@ mod tests {
                 .unwrap();
             assert_eq!(reloaded, saved);
         }
+    }
+
+    #[test]
+    fn reset_removes_saved_profile_metadata_and_managed_avatar() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = ProfileService::new(temp.path().to_path_buf());
+        service
+            .save("AJ".into(), replacement(ImageFormat::Png))
+            .unwrap();
+
+        service.reset().unwrap();
+
+        let snapshot = service.snapshot().unwrap();
+        assert!(!snapshot.is_configured);
+        assert_eq!(snapshot.avatar_data_url, None);
+        assert!(!temp.path().join(PROFILE_DIRECTORY).exists());
     }
 
     #[test]
@@ -548,10 +587,12 @@ mod tests {
             display_name: "Name".into(),
             avatar_data_url: None,
             has_custom_avatar: false,
+            is_configured: true,
         })
         .unwrap();
         assert_eq!(value["displayName"], "Name");
         assert!(value.get("avatarDataUrl").is_some());
         assert!(value.get("hasCustomAvatar").is_some());
+        assert_eq!(value["isConfigured"], true);
     }
 }

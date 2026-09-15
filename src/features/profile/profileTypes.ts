@@ -6,6 +6,7 @@ export type Profile = {
   displayName: string;
   avatarDataUrl: string | null;
   hasCustomAvatar: boolean;
+  isConfigured: boolean;
 };
 
 export type AvatarUpdate =
@@ -32,6 +33,7 @@ export const DEFAULT_PROFILE: Profile = {
   displayName: DEFAULT_DISPLAY_NAME,
   avatarDataUrl: null,
   hasCustomAvatar: false,
+  isConfigured: false,
 };
 
 export class ProfileClientError extends Error {

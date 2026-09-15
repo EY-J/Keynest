@@ -21,7 +21,8 @@ type ProfileSettingsProps = {
 };
 
 export default function ProfileSettings({ profile, onSaved }: ProfileSettingsProps) {
-  const [displayName, setDisplayName] = useState(profile.displayName);
+  const savedDisplayName = profile.isConfigured ? profile.displayName : "";
+  const [displayName, setDisplayName] = useState(savedDisplayName);
   const [avatarUpdate, setAvatarUpdate] = useState<AvatarUpdate>({ kind: "keep" });
   const [previewAvatarUrl, setPreviewAvatarUrl] = useState<string | null>(
     profile.avatarDataUrl,
@@ -32,17 +33,17 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectionGeneration = useRef(0);
   const trimmedName = displayName.trim();
-  const isDirty = trimmedName !== profile.displayName || avatarUpdate.kind !== "keep";
+  const isDirty = trimmedName !== savedDisplayName || avatarUpdate.kind !== "keep";
   const canRemove = avatarUpdate.kind === "replace" || (
     avatarUpdate.kind === "keep" && profile.hasCustomAvatar
   );
 
   useEffect(() => {
-    setDisplayName(profile.displayName);
+    setDisplayName(savedDisplayName);
     setAvatarUpdate({ kind: "keep" });
     setPreviewAvatarUrl(profile.avatarDataUrl);
     setError("");
-  }, [profile.avatarDataUrl, profile.displayName, profile.hasCustomAvatar]);
+  }, [profile.avatarDataUrl, profile.hasCustomAvatar, savedDisplayName]);
 
   useEffect(() => {
     return () => {
@@ -177,6 +178,7 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
                 id="profile-display-name"
                 value={displayName}
                 type="text"
+                placeholder="Enter your display name"
                 autoComplete="name"
                 disabled={isSaving}
                 onChange={(event) => {

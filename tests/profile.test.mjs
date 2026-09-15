@@ -7,11 +7,13 @@ const defaultProfile = {
   displayName: "KeyNest User",
   avatarDataUrl: null,
   hasCustomAvatar: false,
+  isConfigured: false,
 };
 const customProfile = {
   displayName: "Míng 猫",
   avatarDataUrl: "data:image/png;base64,custom",
   hasCustomAvatar: true,
+  isConfigured: true,
 };
 class ProfileClientError extends Error {}
 
@@ -42,6 +44,21 @@ test("sidebar profile is display-only and contains no edit affordance", async ()
   assert.equal(profile.type, "div");
   assert.equal(profile.props.onClick, undefined);
   assert.doesNotMatch(JSON.stringify(profile), /Pencil|Edit profile|dialog/);
+  f.unmount();
+});
+
+test("sidebar does not present the fallback as a saved first-time display name", async () => {
+  const f = await mount("../src/app/components/NavigationSidebar.tsx", {
+    isOpen: true, activeDestination: "home", onClose() {}, onNavigate() {},
+    async onLockKeynest() {}, profile: defaultProfile,
+  }, {
+    "lucide-react": { Folder: "i", House: "i", KeyRound: "i", Lock: "i", NotebookPen: "i", Settings: "i", Sparkles: "i", Star: "i", Trash2: "i" },
+    "../../features/profile/ProfileAvatar": { default: "ProfileAvatar" },
+    "../../features/profile/profileTypes": {},
+  });
+  const details = f.find(node => node.props.className === "sidebar-profile-details");
+  assert.equal(details.props.children[0].props.children, "Local account");
+  assert.equal(details.props.children[1].props.children, "Display name not set");
   f.unmount();
 });
 
@@ -82,6 +99,17 @@ test("Profile uses one compact panel instead of separate SettingsRow cards", asy
   );
   const nameRow = f.find(node => node.props.className === "profile-settings-name-row");
   assert.equal(nameRow.props.children.map(node => node.type).join("|"), "input|button");
+  f.unmount();
+});
+
+test("a first-time profile starts with an empty display-name field", async () => {
+  const f = await mount("../src/features/profile/ProfileSettings.tsx", {
+    profile: defaultProfile, onSaved() {},
+  }, profileDependencies({ async saveProfile() { throw new Error("not called"); } }));
+  const input = f.find(node => node.type === "input" && node.props.type === "text");
+  assert.equal(input.props.value, "");
+  assert.equal(input.props.placeholder, "Enter your display name");
+  assert.equal(f.find(node => node.props.children === "Save changes").props.disabled, true);
   f.unmount();
 });
 
@@ -137,7 +165,7 @@ test("empty display-name validation uses the shared error toast and never saves"
   let saves = 0;
   const toasts = [];
   const f = await mount("../src/features/profile/ProfileSettings.tsx", {
-    profile: defaultProfile, onSaved() {},
+    profile: customProfile, onSaved() {},
   }, profileDependencies({
     async saveProfile() {
       saves++;
@@ -198,6 +226,10 @@ test("valid photo previews before Save and then persists", async () => {
   await f.flush();
   assert.equal(calls.length, 0);
   assert.equal(f.find(node => node.type === "ProfileAvatar").props.avatarUrl, "data:image/png;base64,staged");
+  f.find(node => node.type === "input" && node.props.type === "text").props.onChange({
+    currentTarget: { value: "First profile" },
+  });
+  await f.flush();
   f.find(node => node.type === "form").props.onSubmit({ preventDefault() {} });
   await f.flush();
   assert.equal(calls[0].avatarUpdate.kind, "replace");

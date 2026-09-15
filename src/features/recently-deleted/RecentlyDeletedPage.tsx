@@ -188,8 +188,8 @@ export default function RecentlyDeletedPage() {
       ) : null}
       {!loading && !error && items.length === 0 ? (
         <section className="recently-deleted-empty-state">
-          <Trash2 size={22} aria-hidden="true" />
-          <h2>Recently Deleted is empty</h2>
+          <Trash2 size={32} aria-hidden="true" />
+          <h2>No deleted items</h2>
           <p>Deleted items will appear here for 30 days.</p>
         </section>
       ) : null}

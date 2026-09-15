@@ -46,8 +46,8 @@ export default function NavigationSidebar({
       <div className="sidebar-profile">
         <ProfileAvatar avatarUrl={profile.avatarDataUrl} className="sidebar-avatar" />
         <div className="sidebar-profile-details">
-          <strong>{profile.displayName}</strong>
-          <span>Local account</span>
+          <strong>{profile.isConfigured ? profile.displayName : "Local account"}</strong>
+          <span>{profile.isConfigured ? "Local account" : "Display name not set"}</span>
         </div>
       </div>
 

@@ -15,6 +15,7 @@
   background: var(--kn-surface-raised);
   color: var(--kn-text);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--kn-bg) 55%, transparent);
+  text-align: center;
   pointer-events: none;
 }
 

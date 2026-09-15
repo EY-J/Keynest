@@ -1015,6 +1015,9 @@ fn copy_vault_username_value(
 }
 
 fn disable_startup_for_reset(startup: &StartupService) -> Result<(), PublicIpcError> {
+    if !startup.is_enabled()? {
+        return Ok(());
+    }
     if startup.set_enabled(false)? {
         return Err(StartupError::StateMismatch.into());
     }
@@ -1032,6 +1035,7 @@ pub(crate) fn reset_authenticated(
     startup: &StartupService,
     clipboard: &ClipboardService,
     settings: &SettingsService,
+    profile: &ProfileService,
     auto_lock: &AutoLockService,
     operation_gate: &SecurityOperationGate,
 ) -> Result<AuthStatus, PublicIpcError> {
@@ -1042,6 +1046,7 @@ pub(crate) fn reset_authenticated(
         startup,
         clipboard,
         settings,
+        profile,
         auto_lock,
         operation_gate,
         || {},
@@ -1059,6 +1064,7 @@ fn reset_authenticated_with_hook(
     startup: &StartupService,
     clipboard: &ClipboardService,
     settings: &SettingsService,
+    profile: &ProfileService,
     auto_lock: &AutoLockService,
     operation_gate: &SecurityOperationGate,
     after_validation: impl FnOnce(),
@@ -1069,6 +1075,7 @@ fn reset_authenticated_with_hook(
     disable_startup_for_reset(startup)?;
     clipboard.clear_if_owned()?;
     settings.reset()?;
+    profile.reset()?;
     auth.finish_reset()?;
     auto_lock.disarm();
     Ok(auth.status())
@@ -1080,6 +1087,7 @@ fn reset_recovery(
     startup: &StartupService,
     clipboard: &ClipboardService,
     settings: &SettingsService,
+    profile: &ProfileService,
     auto_lock: &AutoLockService,
     operation_gate: &SecurityOperationGate,
 ) -> Result<AuthStatus, PublicIpcError> {
@@ -1089,6 +1097,7 @@ fn reset_recovery(
         startup,
         clipboard,
         settings,
+        profile,
         auto_lock,
         operation_gate,
         || {},
@@ -1105,6 +1114,7 @@ fn reset_recovery_with_hook(
     startup: &StartupService,
     clipboard: &ClipboardService,
     settings: &SettingsService,
+    profile: &ProfileService,
     auto_lock: &AutoLockService,
     operation_gate: &SecurityOperationGate,
     after_validation: impl FnOnce(),
@@ -1120,6 +1130,7 @@ fn reset_recovery_with_hook(
     disable_startup_for_reset(startup)?;
     clipboard.clear_if_owned()?;
     settings.reset()?;
+    profile.reset()?;
     auth.finish_reset()?;
     auto_lock.disarm();
     Ok(auth.status())
@@ -1602,6 +1613,7 @@ pub(crate) async fn reset_keynest(
     startup: State<'_, StartupService>,
     clipboard: State<'_, ClipboardService>,
     settings: State<'_, SettingsService>,
+    profile: State<'_, ProfileService>,
     auto_lock: State<'_, AutoLockService>,
     operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
@@ -1609,6 +1621,7 @@ pub(crate) async fn reset_keynest(
     let startup = startup.inner().clone();
     let clipboard = clipboard.inner().clone();
     let settings = settings.inner().clone();
+    let profile = profile.inner().clone();
     let auto_lock = auto_lock.inner().clone();
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1618,6 +1631,7 @@ pub(crate) async fn reset_keynest(
             &startup,
             &clipboard,
             &settings,
+            &profile,
             &auto_lock,
             &operation_gate,
         );
@@ -1640,6 +1654,7 @@ pub(crate) async fn reset_keynest_authenticated(
     startup: State<'_, StartupService>,
     clipboard: State<'_, ClipboardService>,
     settings: State<'_, SettingsService>,
+    profile: State<'_, ProfileService>,
     auto_lock: State<'_, AutoLockService>,
     operation_gate: State<'_, SecurityOperationGate>,
 ) -> Result<AuthStatus, PublicIpcError> {
@@ -1648,6 +1663,7 @@ pub(crate) async fn reset_keynest_authenticated(
     let startup = startup.inner().clone();
     let clipboard = clipboard.inner().clone();
     let settings = settings.inner().clone();
+    let profile = profile.inner().clone();
     let auto_lock = auto_lock.inner().clone();
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1658,6 +1674,7 @@ pub(crate) async fn reset_keynest_authenticated(
             &startup,
             &clipboard,
             &settings,
+            &profile,
             &auto_lock,
             &operation_gate,
         );
@@ -2157,6 +2174,7 @@ mod command_tests {
         temp: TempDir,
         store: SettingsStore,
         settings: SettingsService,
+        profile: ProfileService,
         auth: AuthService,
         lock_events: Arc<FakeLockEvents>,
         auto_lock: AutoLockService,
@@ -2179,6 +2197,7 @@ mod command_tests {
             );
             let store = SettingsStore::new(temp.path().to_path_buf());
             let settings = SettingsService::load(store.clone()).unwrap();
+            let profile = ProfileService::new(temp.path().to_path_buf());
             let startup_fake = FakeStartup::default();
             let startup = StartupService::new(Arc::new(startup_fake.clone()));
             let clipboard_port = Arc::new(FakeClipboardPort::default());
@@ -2198,6 +2217,7 @@ mod command_tests {
                 temp,
                 store,
                 settings,
+                profile,
                 auth,
                 lock_events,
                 auto_lock,
@@ -2235,6 +2255,7 @@ mod command_tests {
                 &self.startup,
                 &self.clipboard,
                 &self.settings,
+                &self.profile,
                 &self.auto_lock,
                 &self.operation_gate,
             )
@@ -3467,6 +3488,23 @@ mod command_tests {
     }
 
     #[test]
+    fn reset_succeeds_without_mutating_an_already_disabled_autostart_entry() {
+        let fixture = CommandFixture::new();
+        fixture.create_unlocked_profile();
+        fixture.startup_fake.0.lock().unwrap().enabled = false;
+
+        assert_eq!(
+            fixture
+                .reset_authenticated(PASSWORD, "RESET KEYNEST")
+                .unwrap(),
+            AuthStatus::SetupRequired
+        );
+        let startup = fixture.startup_fake.0.lock().unwrap();
+        assert!(!startup.enabled);
+        assert_eq!(startup.disable_calls, 0);
+    }
+
+    #[test]
     fn clipboard_failure_aborts_before_settings_and_encrypted_deletion() {
         let fixture = CommandFixture::new();
         fixture.create_unlocked_profile();
@@ -3529,6 +3567,10 @@ mod command_tests {
     fn successful_reset_orders_cleanup_preserves_unrelated_and_disarms_after_deletion() {
         let fixture = CommandFixture::new();
         fixture.create_unlocked_profile();
+        fixture
+            .profile
+            .save("AJ".into(), AvatarUpdate::Keep)
+            .unwrap();
         fs::write(fixture.temp.path().join("vault.enc"), b"vault").unwrap();
         fs::write(fixture.temp.path().join("keep.txt"), b"keep").unwrap();
         assert_eq!(
@@ -3538,6 +3580,8 @@ mod command_tests {
             AuthStatus::SetupRequired
         );
         assert!(!fixture.temp.path().join("profile.json").exists());
+        assert!(!fixture.profile.snapshot().unwrap().is_configured);
+        assert!(!fixture.temp.path().join("profile").exists());
         assert!(!fixture.temp.path().join("vault.enc").exists());
         assert!(!fixture.temp.path().join("settings.json").exists());
         assert_eq!(
@@ -3570,6 +3614,7 @@ mod command_tests {
         let startup = fixture.startup.clone();
         let clipboard = fixture.clipboard.clone();
         let settings = fixture.settings.clone();
+        let profile = fixture.profile.clone();
         let auto_lock = fixture.auto_lock.clone();
         let operation_gate = fixture.operation_gate.clone();
         let validated_reset = validated.clone();
@@ -3582,6 +3627,7 @@ mod command_tests {
                 &startup,
                 &clipboard,
                 &settings,
+                &profile,
                 &auto_lock,
                 &operation_gate,
                 || {
@@ -3738,6 +3784,7 @@ mod command_tests {
         let startup = fixture.startup.clone();
         let clipboard = fixture.clipboard.clone();
         let settings = fixture.settings.clone();
+        let profile = fixture.profile.clone();
         let auto_lock = fixture.auto_lock.clone();
         let operation_gate = fixture.operation_gate.clone();
         let (reset_started_tx, reset_started_rx) = mpsc::channel();
@@ -3750,6 +3797,7 @@ mod command_tests {
                 &startup,
                 &clipboard,
                 &settings,
+                &profile,
                 &auto_lock,
                 &operation_gate,
             )
@@ -3783,6 +3831,7 @@ mod command_tests {
                 &fixture.startup,
                 &fixture.clipboard,
                 &fixture.settings,
+                &fixture.profile,
                 &fixture.auto_lock,
                 &fixture.operation_gate,
             )
@@ -3810,6 +3859,7 @@ mod command_tests {
                 &fixture.startup,
                 &fixture.clipboard,
                 &fixture.settings,
+                &fixture.profile,
                 &fixture.auto_lock,
                 &fixture.operation_gate,
             )
@@ -3840,6 +3890,7 @@ mod command_tests {
         let startup = fixture.startup.clone();
         let clipboard = fixture.clipboard.clone();
         let settings = fixture.settings.clone();
+        let profile = fixture.profile.clone();
         let auto_lock = fixture.auto_lock.clone();
         let operation_gate = fixture.operation_gate.clone();
         let validated_reset = validated.clone();
@@ -3851,6 +3902,7 @@ mod command_tests {
                 &startup,
                 &clipboard,
                 &settings,
+                &profile,
                 &auto_lock,
                 &operation_gate,
                 || {
@@ -3886,6 +3938,10 @@ mod command_tests {
     fn locked_recovery_reset_uses_the_same_cleanup_order_and_succeeds() {
         let fixture = CommandFixture::new();
         fixture.create_unlocked_profile();
+        fixture
+            .profile
+            .save("AJ".into(), AvatarUpdate::Keep)
+            .unwrap();
         fixture.auto_lock.lock_now().unwrap();
         fixture.startup_fake.0.lock().unwrap().enabled = true;
         assert_eq!(
@@ -3895,6 +3951,7 @@ mod command_tests {
                 &fixture.startup,
                 &fixture.clipboard,
                 &fixture.settings,
+                &fixture.profile,
                 &fixture.auto_lock,
                 &fixture.operation_gate,
             )
@@ -3902,6 +3959,8 @@ mod command_tests {
             AuthStatus::SetupRequired
         );
         assert!(!fixture.temp.path().join("profile.json").exists());
+        assert!(!fixture.profile.snapshot().unwrap().is_configured);
+        assert!(!fixture.temp.path().join("profile").exists());
         assert!(!fixture.temp.path().join("settings.json").exists());
         assert!(!fixture.startup_fake.0.lock().unwrap().enabled);
     }
@@ -4095,6 +4154,7 @@ mod command_tests {
             &fixture.startup,
             &fixture.clipboard,
             &fixture.settings,
+            &fixture.profile,
             &fixture.auto_lock,
             &fixture.operation_gate,
         )
