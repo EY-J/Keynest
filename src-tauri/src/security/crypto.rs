@@ -10,12 +10,14 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub(crate) const PROFILE_AAD: &[u8] = b"keynest-profile-v1";
 pub(crate) const RECOVERY_AAD: &[u8] = b"keynest-recovery-wrap-v1";
+pub(crate) const PIN_AAD: &[u8] = b"keynest-device-pin-wrap-v1";
 const SALT_LENGTH: usize = 16;
 const VAULT_KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 24;
 const WRAPPED_KEY_LENGTH: usize = VAULT_KEY_LENGTH + 16;
 const RECOVERY_KEY_ENTROPY_LENGTH: usize = 16;
 const RECOVERY_KEY_PREFIX: &str = "KN-R1";
+const DEVICE_SECRET_LENGTH: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +89,17 @@ impl VaultKey {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WrappedVaultKey {
     pub params: KdfParams,
+    pub salt: String,
+    pub nonce: String,
+    pub ciphertext: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PinWrappedVaultKey {
+    pub version: u32,
+    pub params: KdfParams,
+    pub protected_device_secret: String,
     pub salt: String,
     pub nonce: String,
     pub ciphertext: String,
@@ -227,6 +240,87 @@ fn wrap_existing_vault_key_with_aad(
     })
 }
 
+pub(crate) fn wrap_pin_vault_key(
+    pin: &str,
+    device_secret: &[u8],
+    protected_device_secret: &[u8],
+    vault_key: &[u8; VAULT_KEY_LENGTH],
+    params: KdfParams,
+    entropy: &dyn EntropySource,
+) -> Result<PinWrappedVaultKey, CryptoError> {
+    if device_secret.len() != DEVICE_SECRET_LENGTH || protected_device_secret.is_empty() {
+        return Err(CryptoError::InvalidMetadata);
+    }
+    let mut salt = [0_u8; SALT_LENGTH];
+    let mut nonce = [0_u8; NONCE_LENGTH];
+    entropy.fill(&mut salt)?;
+    entropy.fill(&mut nonce)?;
+    let secret = pin_kdf_input(pin, device_secret);
+    let wrapping_key = derive_wrapping_key_bytes(&secret, &salt, params)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
+        .map_err(|_| CryptoError::InvalidParameters)?;
+    let ciphertext = cipher
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: vault_key,
+                aad: PIN_AAD,
+            },
+        )
+        .map_err(|_| CryptoError::AuthenticationFailed)?;
+
+    Ok(PinWrappedVaultKey {
+        version: 1,
+        params,
+        protected_device_secret: STANDARD.encode(protected_device_secret),
+        salt: STANDARD.encode(salt),
+        nonce: STANDARD.encode(nonce),
+        ciphertext: STANDARD.encode(ciphertext),
+    })
+}
+
+pub(crate) fn unwrap_pin_vault_key(
+    pin: &str,
+    device_secret: &[u8],
+    wrapped: &PinWrappedVaultKey,
+) -> Result<VaultKey, CryptoError> {
+    if wrapped.version != 1 || device_secret.len() != DEVICE_SECRET_LENGTH {
+        return Err(CryptoError::InvalidMetadata);
+    }
+    let salt = decode_exact::<SALT_LENGTH>(&wrapped.salt)?;
+    let nonce = decode_exact::<NONCE_LENGTH>(&wrapped.nonce)?;
+    let ciphertext = decode_exact::<WRAPPED_KEY_LENGTH>(&wrapped.ciphertext)?;
+    let secret = pin_kdf_input(pin, device_secret);
+    let wrapping_key = derive_wrapping_key_bytes(&secret, &salt, wrapped.params)?;
+    let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
+        .map_err(|_| CryptoError::InvalidParameters)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: PIN_AAD,
+                },
+            )
+            .map_err(|_| CryptoError::AuthenticationFailed)?,
+    );
+    if plaintext.len() != VAULT_KEY_LENGTH {
+        return Err(CryptoError::InvalidMetadata);
+    }
+    let mut key = Zeroizing::new([0_u8; VAULT_KEY_LENGTH]);
+    key.copy_from_slice(&plaintext);
+    Ok(VaultKey(key))
+}
+
+fn pin_kdf_input(pin: &str, device_secret: &[u8]) -> Zeroizing<Vec<u8>> {
+    let mut input = Zeroizing::new(Vec::with_capacity(device_secret.len() + pin.len() + 1));
+    input.extend_from_slice(device_secret);
+    input.push(0);
+    input.extend_from_slice(pin.as_bytes());
+    input
+}
+
 pub(crate) fn unwrap_vault_key(
     password: &str,
     wrapped: &WrappedVaultKey,
@@ -277,6 +371,14 @@ fn derive_wrapping_key(
     salt: &[u8; SALT_LENGTH],
     params: KdfParams,
 ) -> Result<Zeroizing<[u8; VAULT_KEY_LENGTH]>, CryptoError> {
+    derive_wrapping_key_bytes(password.as_bytes(), salt, params)
+}
+
+fn derive_wrapping_key_bytes(
+    secret: &[u8],
+    salt: &[u8; SALT_LENGTH],
+    params: KdfParams,
+) -> Result<Zeroizing<[u8; VAULT_KEY_LENGTH]>, CryptoError> {
     params.validate()?;
     let argon_params = Params::new(
         params.memory_kib,
@@ -291,12 +393,7 @@ fn derive_wrapping_key(
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
     let mut output = Zeroizing::new([0_u8; VAULT_KEY_LENGTH]);
     argon2
-        .hash_password_into_with_memory(
-            password.as_bytes(),
-            salt,
-            output.as_mut(),
-            memory.as_mut_slice(),
-        )
+        .hash_password_into_with_memory(secret, salt, output.as_mut(), memory.as_mut_slice())
         .map_err(|_| CryptoError::InvalidParameters)?;
     Ok(output)
 }

@@ -11,7 +11,7 @@ const { publicError } = module.namespace;
 test("all Rust public codes are handled without exposing transport details", async () => {
   const rust = await readFile(new URL("../src-tauri/src/ipc.rs", import.meta.url), "utf8");
   const codes = [...rust.matchAll(/(?:Self|PublicIpcError)::new\(\s*"([^"]+)"/g)].map(m => m[1]);
-  for (const code of [...codes, "throttled"]) {
+  for (const code of [...codes, "throttled", "pin-throttled"]) {
     const result = publicError({ code, message: "sentinel-secret C:\\private\\profile.json SQL nonce stack" });
     assert.equal(result.code, code);
     assert.doesNotMatch(result.message, /sentinel|SQL|nonce|stack|C:\\/);
@@ -23,6 +23,7 @@ test("unknown/malformed errors are generic and cooldown is bounded", () => {
     assert.doesNotMatch(publicError(error).message, /sentinel/);
   }
   assert.equal(publicError({ code: "throttled", retryAfterMs: 1e12 }).retryAfterMs, 30000);
+  assert.equal(publicError({ code: "pin-throttled", retryAfterMs: 2000 }).retryAfterMs, 2000);
   assert.equal(publicError({ code: "throttled", retryAfterMs: Infinity }).retryAfterMs, undefined);
   assert.notEqual(publicError({ code: "invalid-credentials" }).code, publicError({ code: "data-error" }).code);
 });

@@ -1,0 +1,55 @@
+.device-pin-modal {
+  font-family: var(--font-ui);
+  text-align: left;
+}
+
+.device-pin-modal .master-password-modal__header h2 {
+  font-family: var(--font-ui);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.device-pin-warning { margin: 0; color: var(--kn-muted); font-size: 12px; line-height: 1.5; }
+.device-pin-description { margin: 5px 0 18px; color: var(--kn-muted); opacity: 0.72; line-height: 1.5; }
+.device-pin-manage { display: grid; }
+.device-pin-manage > p {
+  margin: 14px 0 0;
+  color: var(--kn-muted);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.device-pin-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+.device-pin-actions > button {
+  width: 100%;
+  min-height: 44px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+.device-pin-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--kn-text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.device-pin-status > span { width: 8px; height: 8px; border-radius: 50%; background: var(--kn-accent); box-shadow: 0 0 0 3px var(--kn-accent-soft); }
+.auth-pin-field input { font-variant-numeric: tabular-nums; letter-spacing: 0.35em; }
+
+@media (max-width: 480px) {
+  .device-pin-actions {
+    grid-template-columns: 1fr;
+  }
+}

@@ -64,7 +64,6 @@ export default function AuthenticatedResetDialog({
     <Modal className="reset-dialog" width={440}
       titleId="authenticated-reset-dialog-title" closing={modal.closing} onClose={() => modal.close()}
       onExitComplete={modal.finishClose} pending={isSubmitting} initialFocusRef={passwordRef}>
-        <p className="auth-eyebrow danger-text">DESTRUCTIVE RESET</p>
         <h2 id="authenticated-reset-dialog-title">Reset KeyNest?</h2>
         <p>
           This permanently erases your encrypted profile and vault, then returns

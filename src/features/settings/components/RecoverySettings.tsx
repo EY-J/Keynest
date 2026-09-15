@@ -114,7 +114,6 @@ export default function RecoverySettings() {
         <Modal className="reset-dialog recovery-dialog" titleId="recovery-key-dialog-title"
           closing={modal.closing} onClose={() => modal.close()} onExitComplete={modal.finishClose}
           pending={isSubmitting} closeOnEscape={!recoveryKey}>
-            <p className="auth-eyebrow">RECOVERY</p>
             <h2 id="recovery-key-dialog-title">
               {recoveryKey
                 ? "Save your new Recovery Key"
@@ -137,7 +136,7 @@ export default function RecoverySettings() {
               />
             ) : (
               <form onSubmit={(event) => void submit(event)}>
-                <p>
+                <p className="recovery-dialog-description">
                   Creating or replacing a Recovery Key requires your current
                   Master Password.
                 </p>

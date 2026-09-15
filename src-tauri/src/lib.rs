@@ -1,8 +1,10 @@
 mod autofill;
 mod diagnostics;
 mod ipc;
+mod notes;
 mod platform;
 mod profile;
+mod recently_deleted;
 mod security;
 mod settings;
 #[allow(dead_code)]
@@ -12,6 +14,7 @@ use std::{sync::Arc, time::Duration};
 
 use autofill::TauriHostApprovalEventSink;
 use ipc::DataFolderService;
+use notes::NotesService;
 use platform::startup::{
     minimize_for_launch, StartupService, TauriMainWindowMinimizer, TauriStartupRegistration,
 };
@@ -96,8 +99,9 @@ pub fn run() {
             let store = ProfileStore::new(app_data_dir.clone());
             let auth = AuthService::load(store, kdf_params, Arc::new(OsEntropy));
             app.manage(auth.clone());
-            let vault = VaultService::new(app_data_dir, Arc::new(OsEntropy));
+            let vault = VaultService::new(app_data_dir.clone(), Arc::new(OsEntropy));
             app.manage(vault.clone());
+            app.manage(NotesService::new(app_data_dir, Arc::new(OsEntropy)));
             app.manage(
                 AutofillService::new(auth.clone(), vault, operation_gate.clone())
                     .with_host_approval_events(Arc::new(TauriHostApprovalEventSink::new(
@@ -150,10 +154,15 @@ pub fn run() {
             ipc::create_master_password,
             ipc::complete_recovery_key_display,
             ipc::get_recovery_status,
+            ipc::get_pin_status,
             ipc::recover_master_password,
             ipc::regenerate_recovery_key,
             ipc::copy_recovery_key,
             ipc::unlock,
+            ipc::unlock_with_pin,
+            ipc::setup_pin,
+            ipc::change_pin,
+            ipc::remove_pin,
             ipc::lock,
             ipc::get_profile,
             ipc::save_profile,
@@ -176,6 +185,14 @@ pub fn run() {
             ipc::delete_vault_record,
             ipc::copy_vault_password,
             ipc::copy_vault_username,
+            ipc::list_notes,
+            ipc::create_note,
+            ipc::update_note,
+            ipc::delete_note,
+            ipc::list_deleted_items,
+            ipc::restore_deleted_item,
+            ipc::permanently_delete_item,
+            ipc::empty_recently_deleted,
             ipc::get_pending_host_approval,
             ipc::list_host_approval_candidates,
             ipc::approve_login_host,

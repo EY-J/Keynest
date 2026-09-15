@@ -1,11 +1,11 @@
 import {
-  type AnimationEvent,
   type ChangeEvent,
   type FormEvent,
   useEffect,
   useRef,
   useState,
 } from "react";
+import { useToast } from "../../components/ui/Toast/ToastProvider";
 import { prepareProfileImage, profileClient } from "./profileClient";
 import ProfileAvatar from "./ProfileAvatar";
 import {
@@ -20,17 +20,6 @@ type ProfileSettingsProps = {
   onSaved(profile: Profile): void;
 };
 
-const TOAST_VISIBLE_MS = 2_200;
-const TOAST_EXIT_MS = 200;
-const TOAST_EXIT_FALLBACK_MS = TOAST_EXIT_MS + 50;
-
-type ToastPhase = "visible" | "exiting";
-type ToastContent = {
-  type: "success" | "error";
-  title: string;
-  subtitle?: string;
-};
-
 export default function ProfileSettings({ profile, onSaved }: ProfileSettingsProps) {
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [avatarUpdate, setAvatarUpdate] = useState<AvatarUpdate>({ kind: "keep" });
@@ -38,15 +27,10 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
     profile.avatarDataUrl,
   );
   const [error, setError] = useState("");
-  const [toastContent, setToastContent] = useState<ToastContent | null>(null);
-  const [toastPhase, setToastPhase] = useState<ToastPhase | null>(null);
-  const [toastCycle, setToastCycle] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
+  const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectionGeneration = useRef(0);
-  const isMounted = useRef(true);
-  const toastExitTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const toastRemovalTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const trimmedName = displayName.trim();
   const isDirty = trimmedName !== profile.displayName || avatarUpdate.kind !== "keep";
   const canRemove = avatarUpdate.kind === "replace" || (
@@ -61,53 +45,10 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
   }, [profile.avatarDataUrl, profile.displayName, profile.hasCustomAvatar]);
 
   useEffect(() => {
-    isMounted.current = true;
     return () => {
-      isMounted.current = false;
       selectionGeneration.current += 1;
-      clearToastTimers();
     };
   }, []);
-
-  function clearToastTimers() {
-    if (toastExitTimer.current !== null) {
-      window.clearTimeout(toastExitTimer.current);
-      toastExitTimer.current = null;
-    }
-    if (toastRemovalTimer.current !== null) {
-      window.clearTimeout(toastRemovalTimer.current);
-      toastRemovalTimer.current = null;
-    }
-  }
-
-  function showToast(content: ToastContent) {
-    if (!isMounted.current) {
-      return;
-    }
-    clearToastTimers();
-    setToastContent(content);
-    setToastCycle((cycle) => cycle + 1);
-    setToastPhase("visible");
-    toastExitTimer.current = window.setTimeout(() => {
-      toastExitTimer.current = null;
-      setToastPhase("exiting");
-      toastRemovalTimer.current = window.setTimeout(() => {
-        toastRemovalTimer.current = null;
-        setToastPhase(null);
-      }, TOAST_EXIT_FALLBACK_MS);
-    }, TOAST_VISIBLE_MS);
-  }
-
-  function finishToastExit(event: AnimationEvent<HTMLElement>) {
-    if (toastPhase !== "exiting" || event.currentTarget !== event.target) {
-      return;
-    }
-    if (toastRemovalTimer.current !== null) {
-      window.clearTimeout(toastRemovalTimer.current);
-      toastRemovalTimer.current = null;
-    }
-    setToastPhase(null);
-  }
 
   async function choosePhoto(event: ChangeEvent<HTMLInputElement>) {
     const selectedFile = event.currentTarget.files?.[0];
@@ -155,7 +96,7 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
     }
     if (!trimmedName) {
       setError("");
-      showToast({ type: "error", title: "Enter a display name." });
+      showToast({ type: "error", message: "Enter a display name." });
       return;
     }
     if ([...trimmedName].length > 50) {
@@ -172,8 +113,8 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
       setPreviewAvatarUrl(savedProfile.avatarDataUrl);
       showToast({
         type: "success",
-        title: "Profile saved",
-        subtitle: "Your profile was updated successfully.",
+        message: "Profile saved",
+        detail: "Your profile was updated successfully.",
       });
       onSaved(savedProfile);
     } catch (saveError) {
@@ -188,7 +129,6 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
   }
 
   return (
-    <>
       <form className="profile-settings settings-section-body" onSubmit={(event) => void save(event)}>
         <section className="profile-settings-panel">
           <div className="profile-settings-photo">
@@ -257,20 +197,5 @@ export default function ProfileSettings({ profile, onSaved }: ProfileSettingsPro
           {error ? <p className="profile-settings-message error" role="alert">{error}</p> : null}
         </section>
       </form>
-
-      {toastPhase && toastContent ? (
-        <aside
-          key={toastCycle}
-          className={`profile-save-toast is-${toastPhase} is-${toastContent.type}`}
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          onAnimationEnd={finishToastExit}
-        >
-          <strong>{toastContent.title}</strong>
-          {toastContent.subtitle ? <span>{toastContent.subtitle}</span> : null}
-        </aside>
-      ) : null}
-    </>
   );
 }

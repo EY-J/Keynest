@@ -7,6 +7,7 @@ import AuthenticatedResetDialog from "./AuthenticatedResetDialog";
 import ChangeMasterPasswordForm from "./ChangeMasterPasswordForm";
 import RecoverySettings from "./RecoverySettings";
 import SettingsRow from "./SettingsRow";
+import DevicePinSettings from "./DevicePinSettings";
 
 const SAVE_ERROR = "KeyNest could not save this security preference.";
 
@@ -179,6 +180,7 @@ export default function SecuritySettings({
 
       <p className="settings-group-label">ACCESS</p>
       <div className="settings-row-list">
+        <DevicePinSettings />
         <ChangeMasterPasswordForm />
       </div>
 

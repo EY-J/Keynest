@@ -13,6 +13,11 @@ export type RecoveryStatus = {
   configured: boolean;
 };
 
+export type PinStatus = {
+  configured: boolean;
+  unlockAvailable: boolean;
+};
+
 export class AuthClientError extends Error {
   readonly code: string;
   readonly retryAfterMs?: number;

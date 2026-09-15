@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-use super::crypto::WrappedVaultKey;
+use super::crypto::{PinWrappedVaultKey, WrappedVaultKey};
 
 const PROFILE_FILENAME: &str = "profile.json";
 const VAULT_FILENAME: &str = "vault.enc";
@@ -28,6 +28,8 @@ pub(crate) struct StoredProfile {
     pub wrapped_key: WrappedVaultKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_wrapped_key: Option<WrappedVaultKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_wrapped_key: Option<PinWrappedVaultKey>,
 }
 
 impl StoredProfile {
@@ -39,6 +41,7 @@ impl StoredProfile {
             key_wrap_algorithm: KEY_WRAP_ALGORITHM.to_owned(),
             wrapped_key,
             recovery_wrapped_key: None,
+            pin_wrapped_key: None,
         }
     }
 
@@ -52,6 +55,7 @@ impl StoredProfile {
             key_wrap_algorithm: KEY_WRAP_ALGORITHM.to_owned(),
             wrapped_key,
             recovery_wrapped_key: Some(recovery_wrapped_key),
+            pin_wrapped_key: None,
         }
     }
 
@@ -70,6 +74,20 @@ impl StoredProfile {
         }
     }
 
+    pub(crate) fn replacing_pin_wrapper(&self, pin_wrapped_key: PinWrappedVaultKey) -> Self {
+        Self {
+            pin_wrapped_key: Some(pin_wrapped_key),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn removing_pin_wrapper(&self) -> Self {
+        Self {
+            pin_wrapped_key: None,
+            ..self.clone()
+        }
+    }
+
     fn validate(&self) -> Result<(), StorageError> {
         let supported_shape = match self.format_version {
             LEGACY_FORMAT_VERSION => self.recovery_wrapped_key.is_none(),
@@ -84,6 +102,10 @@ impl StoredProfile {
                 .recovery_wrapped_key
                 .as_ref()
                 .is_some_and(|wrapped| !valid_wrapped_key(wrapped))
+            || self
+                .pin_wrapped_key
+                .as_ref()
+                .is_some_and(|wrapped| !valid_pin_wrapped_key(wrapped))
         {
             return Err(StorageError::DamagedProfile);
         }
@@ -171,6 +193,10 @@ impl ProfileStore {
     }
 
     pub(crate) fn reset(&self) -> Result<(), StorageError> {
+        remove_if_present(&self.app_data_dir.join("notes.enc-journal"))?;
+        remove_if_present(&self.app_data_dir.join("notes.enc-wal"))?;
+        remove_if_present(&self.app_data_dir.join("notes.enc-shm"))?;
+        remove_if_present(&self.app_data_dir.join("notes.enc"))?;
         remove_if_present(&self.app_data_dir.join("vault.enc-journal"))?;
         remove_if_present(&self.app_data_dir.join("vault.enc-wal"))?;
         remove_if_present(&self.app_data_dir.join("vault.enc-shm"))?;
@@ -212,6 +238,16 @@ fn decoded_length(value: &str) -> Option<usize> {
 
 fn valid_wrapped_key(wrapped: &WrappedVaultKey) -> bool {
     wrapped.params.validate().is_ok()
+        && decoded_length(&wrapped.salt) == Some(16)
+        && decoded_length(&wrapped.nonce) == Some(24)
+        && decoded_length(&wrapped.ciphertext) == Some(48)
+}
+
+fn valid_pin_wrapped_key(wrapped: &PinWrappedVaultKey) -> bool {
+    wrapped.version == 1
+        && wrapped.params.validate().is_ok()
+        && decoded_length(&wrapped.protected_device_secret)
+            .is_some_and(|length| (1..=4096).contains(&length))
         && decoded_length(&wrapped.salt) == Some(16)
         && decoded_length(&wrapped.nonce) == Some(24)
         && decoded_length(&wrapped.ciphertext) == Some(48)
@@ -364,6 +400,10 @@ mod tests {
         std::fs::write(temp.path().join("vault.enc-journal"), b"journal").unwrap();
         std::fs::write(temp.path().join("vault.enc-wal"), b"wal").unwrap();
         std::fs::write(temp.path().join("vault.enc-shm"), b"shm").unwrap();
+        std::fs::write(temp.path().join("notes.enc"), b"notes").unwrap();
+        std::fs::write(temp.path().join("notes.enc-journal"), b"journal").unwrap();
+        std::fs::write(temp.path().join("notes.enc-wal"), b"wal").unwrap();
+        std::fs::write(temp.path().join("notes.enc-shm"), b"shm").unwrap();
         std::fs::write(temp.path().join("keep.txt"), b"keep").unwrap();
 
         store.reset().unwrap();
@@ -373,6 +413,10 @@ mod tests {
         assert!(!temp.path().join("vault.enc-journal").exists());
         assert!(!temp.path().join("vault.enc-wal").exists());
         assert!(!temp.path().join("vault.enc-shm").exists());
+        assert!(!temp.path().join("notes.enc").exists());
+        assert!(!temp.path().join("notes.enc-journal").exists());
+        assert!(!temp.path().join("notes.enc-wal").exists());
+        assert!(!temp.path().join("notes.enc-shm").exists());
         assert!(temp.path().join("keep.txt").exists());
     }
 

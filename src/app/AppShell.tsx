@@ -7,6 +7,8 @@ import {
   toggleFavoriteCredentialId,
 } from "../features/vault/credentialFavorites";
 import HomePage from "../features/home/HomePage";
+import NotesPage from "../features/notes/NotesPage";
+import RecentlyDeletedPage from "../features/recently-deleted/RecentlyDeletedPage";
 import VaultPage from "../features/vault/VaultPage";
 import SettingsPage from "../features/settings/SettingsPage";
 import { profileClient } from "../features/profile/profileClient";
@@ -17,7 +19,7 @@ import {
 import AppTitleBar from "./components/AppTitleBar";
 import NavigationSidebar from "./components/NavigationSidebar";
 
-export type AuthenticatedDestination = "home" | "vault" | "favorites" | "settings";
+export type AuthenticatedDestination = "home" | "vault" | "notes" | "favorites" | "recently-deleted" | "settings";
 
 type AppShellProps = {
   onLockKeynest: () => Promise<void>;
@@ -129,7 +131,11 @@ export default function AppShell({
       ) : null}
 
       {activeDestination === "home" ? (
-        <HomePage onNavigateToVault={() => navigate("vault")} />
+        <HomePage onNavigate={navigate} />
+      ) : activeDestination === "notes" ? (
+        <NotesPage />
+      ) : activeDestination === "recently-deleted" ? (
+        <RecentlyDeletedPage />
       ) : activeDestination === "vault" || activeDestination === "favorites" ? (
         <VaultPage
           favoriteCredentialIds={favoriteCredentialIds}

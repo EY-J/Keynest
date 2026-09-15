@@ -26,6 +26,7 @@
   transform-origin: top center;
 }
 .keynest-modal__body { min-width: 0; overflow-wrap: anywhere; }
+.keynest-modal button { font-size: 12px; }
 .keynest-modal[open] { animation: keynest-modal-enter var(--modal-enter-duration) var(--modal-enter-ease) both; }
 .keynest-modal::backdrop {
   background: rgba(0, 0, 0, 0.32);

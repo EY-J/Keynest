@@ -45,7 +45,7 @@ button.keynest-select__trigger:hover:not(:disabled) {
 }
 
 button.keynest-select__trigger:focus-visible {
-  border-color: var(--kn-border-strong);
+  border-color: var(--kn-focus-border, var(--kn-border-strong));
   outline: 0;
   box-shadow: 0 0 0 2px var(--kn-accent-soft);
 }
@@ -174,7 +174,7 @@ button.keynest-select__clear:disabled { cursor: default; }
 
 .keynest-select__option[aria-selected="true"] {
   background: color-mix(in srgb, var(--kn-accent-soft) 82%, var(--kn-surface-raised));
-  color: var(--kn-accent);
+  color: var(--kn-accent-text, var(--kn-accent));
 }
 
 .keynest-select__option[aria-selected="true"][data-highlighted="true"] {

@@ -2,14 +2,21 @@
 :root {
   --button-transition: 140ms ease;
   --button-press-transition: 90ms ease;
-  --button-primary-bg: color-mix(in srgb, var(--kn-accent) 80%, transparent);
-  --button-primary-bg-hover: var(--kn-accent);
+  --button-primary-bg: var(--kn-accent);
+  --button-primary-bg-hover: var(--kn-accent-hover, var(--kn-accent));
   --button-danger-bg: color-mix(in srgb, var(--kn-danger) 80%, transparent);
   --button-danger-bg-hover: var(--kn-danger);
   --button-neutral-bg: color-mix(in srgb, var(--kn-text) 2%, transparent);
   --button-neutral-bg-hover: color-mix(in srgb, var(--kn-text) 9%, transparent);
   --button-neutral-border: color-mix(in srgb, var(--kn-text) 10%, transparent);
   --button-neutral-border-hover: color-mix(in srgb, var(--kn-text) 22%, transparent);
+}
+
+:root[data-theme="light"] {
+  --button-neutral-bg: var(--kn-surface);
+  --button-neutral-bg-hover: var(--kn-accent-soft-hover);
+  --button-neutral-border: var(--kn-border);
+  --button-neutral-border-hover: var(--kn-border-strong);
 }
 
 /* Existing semantic classes are aliases; unclassified actions are neutral. */

@@ -1027,4 +1027,82 @@ mod tests {
             Err(VaultError::EntropyUnavailable)
         );
     }
+
+    #[test]
+    fn deleted_credentials_are_hidden_restorable_and_purgeable() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = service(temp.path().to_path_buf());
+        let key = vault_key();
+        let created = service.create(&key, input()).unwrap();
+
+        service.delete(&key, &created.id).unwrap();
+        assert!(service.list(&key).unwrap().is_empty());
+        assert_eq!(service.get(&key, &created.id), Err(VaultError::NotFound));
+        assert_eq!(
+            service.password_for_copy(&key, &created.id),
+            Err(VaultError::NotFound)
+        );
+        let deleted = service.list_deleted(&key).unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].title, "Example account");
+        assert_eq!(
+            deleted[0].item_type,
+            crate::recently_deleted::DeletedItemType::Credential
+        );
+
+        service.restore(&key, &created.id).unwrap();
+        assert_eq!(service.list(&key).unwrap().len(), 1);
+        service.delete(&key, &created.id).unwrap();
+        service.purge_deleted_before(&key, i64::MAX).unwrap();
+        assert!(service.list_deleted(&key).unwrap().is_empty());
+        assert_eq!(
+            service.restore(&key, &created.id),
+            Err(VaultError::NotFound)
+        );
+    }
+
+    #[test]
+    fn version_one_schema_migrates_to_soft_delete_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("vault.enc");
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE vault_records (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    format_version INTEGER NOT NULL,
+                    nonce BLOB NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                CREATE INDEX vault_records_updated_at_idx
+                    ON vault_records(updated_at_ms DESC, id ASC);
+                PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(service(temp.path().to_path_buf())
+            .list(&vault_key())
+            .unwrap()
+            .is_empty());
+        let connection = rusqlite::Connection::open(path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('vault_records') WHERE name = 'deleted_at_ms'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import VaultModal from "./components/VaultModal";
 import { ModalCloseButton, useModalClose } from "../../components/ui/Modal/Modal";
 import CredentialDetailsModal from "./components/CredentialDetailsModal";
+import DeleteCredentialDialog from "./components/DeleteCredentialDialog";
 import CredentialForm from "./components/CredentialForm";
 import CredentialCardStack from "./components/CredentialCardStack";
 import CredentialList from "./components/CredentialList";
@@ -48,6 +49,7 @@ export default function VaultPage({
   const [tag, setTag] = useState("");
   const [viewMode, setViewMode] = useState<VaultViewMode>(getInitialViewMode);
   const [selectedCredentialId, setSelectedCredentialId] = useState<string | null>(null);
+  const [credentialPendingDelete, setCredentialPendingDelete] = useState<CredentialSummary | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isAddingPending, setIsAddingPending] = useState(false);
   const loadRequestId = useRef(0);
@@ -255,7 +257,20 @@ export default function VaultPage({
           onClose={() => setSelectedCredentialId(null)}
           onChanged={loadRecords}
           onToggleFavorite={() => onToggleFavorite(selectedCredentialId)}
+          onRequestDelete={(credential) => {
+            setSelectedCredentialId(null);
+            setCredentialPendingDelete(credential);
+          }}
           fallbackFocusRef={addButtonRef}
+        />
+      ) : null}
+      {credentialPendingDelete ? (
+        <DeleteCredentialDialog
+          key={credentialPendingDelete.id}
+          credential={credentialPendingDelete}
+          fallbackFocusRef={addButtonRef}
+          onCancel={() => setCredentialPendingDelete(null)}
+          onDeleted={loadRecords}
         />
       ) : null}
     </main>

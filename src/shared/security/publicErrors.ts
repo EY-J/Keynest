@@ -9,6 +9,14 @@ const messages: Record<string, string> = {
   "recovery-not-configured": "This KeyNest profile does not have a Recovery Key yet.",
   "invalid-recovery-key": "The Recovery Key is incorrect.",
   throttled: "Wait a moment before trying again.",
+  "invalid-pin-format": "Enter a 6-digit PIN.",
+  "pin-confirmation-mismatch": "The PINs do not match.",
+  "invalid-pin": "The device PIN is incorrect.",
+  "pin-not-configured": "Device PIN unlock is not configured.",
+  "pin-already-configured": "Device PIN unlock is already configured.",
+  "pin-throttled": "Wait a moment before trying the device PIN again.",
+  "pin-requires-master-password": "Too many incorrect PIN attempts. Use your Master Password to unlock KeyNest.",
+  "device-protection-unavailable": "Windows could not protect the device PIN on this account.",
   "invalid-reset-confirmation": "Type RESET KEYNEST exactly to confirm.",
   unauthorized: "KeyNest is locked.",
   "data-error": "KeyNest could not verify your local data.",
@@ -38,6 +46,13 @@ const messages: Record<string, string> = {
   "vault-data-error": "KeyNest could not verify your vault data.",
   "vault-entropy-error": "KeyNest could not generate secure vault data.",
   "vault-storage-error": "KeyNest could not access its encrypted vault data.",
+  "invalid-note-title": "Enter a note title.",
+  "invalid-note-content": "This note is too long.",
+  "invalid-note-tags": "Check the note tags.",
+  "note-not-found": "The note was not found.",
+  "notes-data-error": "KeyNest could not verify your notes data.",
+  "notes-entropy-error": "KeyNest could not generate secure notes data.",
+  "notes-storage-error": "KeyNest could not access its encrypted notes data.",
   "host-approval-unavailable": "This login-host approval request is no longer available.",
 };
 
@@ -46,7 +61,7 @@ export function publicError(error: unknown) {
     ? error as Record<string, unknown> : {};
   const code = typeof value.code === "string" && Object.prototype.hasOwnProperty.call(messages, value.code)
     ? value.code : "unknown-error";
-  const retryAfterMs = code === "throttled" && typeof value.retryAfterMs === "number"
+  const retryAfterMs = (code === "throttled" || code === "pin-throttled") && typeof value.retryAfterMs === "number"
     && Number.isFinite(value.retryAfterMs)
     ? Math.min(30_000, Math.max(0, Math.ceil(value.retryAfterMs))) : undefined;
   return { code, message: messages[code] ?? "KeyNest could not complete the request.", retryAfterMs };

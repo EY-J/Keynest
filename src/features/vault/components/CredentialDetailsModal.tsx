@@ -14,6 +14,7 @@ type CredentialDetailsModalProps = {
   onClose: () => void;
   onChanged: () => Promise<void>;
   onToggleFavorite: () => void;
+  onRequestDelete: (credential: CredentialSummary) => void;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
 };
 
@@ -44,6 +45,7 @@ export default function CredentialDetailsModal({
   onClose,
   onChanged,
   onToggleFavorite,
+  onRequestDelete,
   fallbackFocusRef,
 }: CredentialDetailsModalProps) {
   const [credentialSummary, setCredentialSummary] =
@@ -55,15 +57,12 @@ export default function CredentialDetailsModal({
   const [isLoading, setIsLoading] = useState(true);
   const isRevealed = revealedPassword !== null;
   const [isEditing, setIsEditing] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [status, setStatus] = useState("");
   const [isUsernameCopied, setIsUsernameCopied] = useState(false);
   const [isPasswordCopied, setIsPasswordCopied] = useState(false);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const editNameRef = useRef<HTMLInputElement>(null);
-  const deleteConfirmationRef = useRef<HTMLInputElement>(null);
   const requestGenerationRef = useRef(0);
   const revealRequestRef = useRef(0);
   const usernameCopyFeedbackTimerRef = useRef<number | null>(null);
@@ -124,8 +123,6 @@ export default function CredentialDetailsModal({
     setRevealedPassword(null);
     setCredentialForEditing(null);
     setIsEditing(false);
-    setIsDeleting(false);
-    setDeleteConfirmation("");
     setIsPending(false);
     void vaultClient
       .getCredentialSummary(credentialId)
@@ -156,11 +153,9 @@ export default function CredentialDetailsModal({
     queueMicrotask(() => {
       if (isEditing) {
         editNameRef.current?.focus();
-      } else if (isDeleting) {
-        deleteConfirmationRef.current?.focus();
       }
     });
-  }, [isDeleting, isEditing]);
+  }, [isEditing]);
 
   function closeModal() {
     if (!isPending) modalClose.close();
@@ -302,32 +297,11 @@ export default function CredentialDetailsModal({
     modalClose.close();
   }
 
-  async function deleteCredential() {
-    if (!credentialSummary || deleteConfirmation !== credentialSummary.name) {
-      return;
-    }
-    const generation = requestGenerationRef.current;
-    setError("");
-    setIsPending(true);
-    try {
-      await vaultClient.deleteCredential(credentialId);
-      if (requestGenerationRef.current !== generation) {
-        return;
-      }
-      await onChanged();
-      if (requestGenerationRef.current !== generation) {
-        return;
-      }
-      modalClose.close();
-    } catch {
-      if (requestGenerationRef.current === generation) {
-        setError("KeyNest could not delete this credential.");
-      }
-    } finally {
-      if (requestGenerationRef.current === generation) {
-        setIsPending(false);
-      }
-    }
+  function requestDeleteCredential() {
+    if (!credentialSummary || isPending) return;
+    const credential = credentialSummary;
+    setRevealedPassword(null);
+    modalClose.close(() => onRequestDelete(credential));
   }
 
   const title = credentialSummary?.name ?? "Credential";
@@ -357,7 +331,7 @@ export default function CredentialDetailsModal({
             <p className="eyebrow">PASSWORD VAULT</p>
             <ModalCloseButton buttonRef={closeButtonRef} label="Close credential" onClick={closeModal} disabled={isPending || modalClose.closing} />
           </div>
-          {credentialSummary && !isDeleting ? (
+          {credentialSummary ? (
             <div className="vault-credential-identity">
               <ServiceLogo name={credentialSummary.name} website={credentialSummary.website} size="large" />
               <div className="vault-credential-identity-copy">
@@ -412,10 +386,7 @@ export default function CredentialDetailsModal({
                     type="button"
                     aria-label="Delete credential"
                     title="Delete credential"
-                    onClick={() => {
-                      setRevealedPassword(null);
-                      setIsDeleting(true);
-                    }}
+                    onClick={requestDeleteCredential}
                     disabled={isPending}
                   >
                     <Trash2 size={17} aria-hidden="true" />
@@ -437,7 +408,7 @@ export default function CredentialDetailsModal({
           Loading credential…
         </p>
       ) : null}
-      {error && !isEditing && !isDeleting ? (
+      {error && !isEditing ? (
         <p className="vault-form-error" aria-live="assertive">
           {error}
         </p>
@@ -456,7 +427,7 @@ export default function CredentialDetailsModal({
           initialFocusRef={editNameRef}
         />
       ) : null}
-      {credentialSummary && !isEditing && !isDeleting ? (
+      {credentialSummary && !isEditing ? (
         <div className="vault-record-detail">
           <div className="vault-detail-row">
             <UserRound className="vault-detail-row-icon" size={21} aria-hidden="true" />
@@ -542,50 +513,6 @@ export default function CredentialDetailsModal({
             </div>
           </div>
         </div>
-      ) : null}
-      {credentialSummary && isDeleting ? (
-        <section
-          className="vault-delete-confirmation"
-          aria-labelledby="delete-credential-title"
-        >
-          <h3 id="delete-credential-title">Delete {credentialSummary.name} permanently?</h3>
-          <p>This action cannot be undone.</p>
-          <label>
-            <span>Type {credentialSummary.name} to confirm</span>
-            <input
-              ref={deleteConfirmationRef}
-              value={deleteConfirmation}
-              onChange={(event) => setDeleteConfirmation(event.target.value)}
-              disabled={isPending}
-            />
-          </label>
-          {error ? (
-            <p className="vault-form-error" aria-live="assertive">
-              {error}
-            </p>
-          ) : null}
-          <div className="vault-dialog-actions">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => {
-                setIsDeleting(false);
-                setDeleteConfirmation("");
-              }}
-              disabled={isPending}
-            >
-              Cancel
-            </button>
-            <button
-              className="vault-danger-button"
-              type="button"
-              onClick={() => void deleteCredential()}
-              disabled={isPending || deleteConfirmation !== credentialSummary.name}
-            >
-              Delete Credential
-            </button>
-          </div>
-        </section>
       ) : null}
     </VaultModal>
   );

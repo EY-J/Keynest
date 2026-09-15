@@ -8,7 +8,10 @@ use std::{
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use zeroize::Zeroizing;
 
-use crate::security::EntropySource;
+use crate::{
+    recently_deleted::{DeletedItem, DeletedItemSource, DeletedItemType},
+    security::EntropySource,
+};
 
 use super::{
     crypto::{decrypt, encrypt, FORMAT_VERSION},
@@ -16,7 +19,7 @@ use super::{
 };
 
 const VAULT_FILENAME: &str = "vault.enc";
-const CREATE_VAULT_TABLE_SQL: &str = "CREATE TABLE vault_records (
+const CREATE_VAULT_TABLE_V1_SQL: &str = "CREATE TABLE vault_records (
     id TEXT PRIMARY KEY NOT NULL,
     format_version INTEGER NOT NULL,
     nonce BLOB NOT NULL,
@@ -24,8 +27,36 @@ const CREATE_VAULT_TABLE_SQL: &str = "CREATE TABLE vault_records (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL
 )";
+const CREATE_VAULT_TABLE_V2_SQL: &str = "CREATE TABLE vault_records (
+    id TEXT PRIMARY KEY NOT NULL,
+    format_version INTEGER NOT NULL,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    deleted_at_ms INTEGER
+)";
 const CREATE_VAULT_INDEX_SQL: &str = "CREATE INDEX vault_records_updated_at_idx
     ON vault_records(updated_at_ms DESC, id ASC)";
+const MIGRATE_VAULT_V1_TO_V2_SQL: &str = "ALTER TABLE vault_records RENAME TO vault_records_v1;
+DROP INDEX vault_records_updated_at_idx;
+CREATE TABLE vault_records (
+    id TEXT PRIMARY KEY NOT NULL,
+    format_version INTEGER NOT NULL,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    deleted_at_ms INTEGER
+);
+INSERT INTO vault_records
+    (id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms)
+    SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, NULL
+    FROM vault_records_v1;
+DROP TABLE vault_records_v1;
+CREATE INDEX vault_records_updated_at_idx
+    ON vault_records(updated_at_ms DESC, id ASC);
+PRAGMA user_version = 2;";
 
 #[derive(Clone)]
 pub(crate) struct VaultService {
@@ -40,6 +71,7 @@ struct StoredRecord {
     ciphertext: Vec<u8>,
     created_at_ms: i64,
     updated_at_ms: i64,
+    deleted_at_ms: Option<i64>,
 }
 
 impl VaultService {
@@ -54,8 +86,8 @@ impl VaultService {
         let connection = self.open()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms
-                 FROM vault_records ORDER BY updated_at_ms DESC, id ASC",
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE deleted_at_ms IS NULL ORDER BY updated_at_ms DESC, id ASC",
             )
             .map_err(storage_error)?;
         let records = statement
@@ -91,8 +123,8 @@ impl VaultService {
         connection
             .execute(
                 "INSERT INTO vault_records
-                 (id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 (id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
                 params![
                     id,
                     FORMAT_VERSION,
@@ -111,8 +143,8 @@ impl VaultService {
         let connection = self.open()?;
         let record = connection
             .query_row(
-                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms
-                 FROM vault_records WHERE id = ?1",
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NULL",
                 params![id],
                 stored_record,
             )
@@ -139,8 +171,8 @@ impl VaultService {
         let transaction = connection.transaction().map_err(storage_error)?;
         let stored = transaction
             .query_row(
-                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms
-                 FROM vault_records WHERE id = ?1",
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NULL",
                 params![id],
                 stored_record,
             )
@@ -158,7 +190,7 @@ impl VaultService {
             .execute(
                 "UPDATE vault_records
                  SET format_version = ?1, nonce = ?2, ciphertext = ?3, updated_at_ms = ?4
-                 WHERE id = ?5",
+                 WHERE id = ?5 AND deleted_at_ms IS NULL",
                 params![
                     FORMAT_VERSION,
                     encrypted.nonce,
@@ -181,8 +213,8 @@ impl VaultService {
         let transaction = connection.transaction().map_err(storage_error)?;
         let stored = transaction
             .query_row(
-                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms
-                 FROM vault_records WHERE id = ?1",
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NULL",
                 params![id],
                 stored_record,
             )
@@ -191,7 +223,10 @@ impl VaultService {
             .ok_or(VaultError::NotFound)?;
         let _record = self.decrypt_input(vault_key, &stored)?;
         let changed = transaction
-            .execute("DELETE FROM vault_records WHERE id = ?1", params![id])
+            .execute(
+                "UPDATE vault_records SET deleted_at_ms = ?1 WHERE id = ?2 AND deleted_at_ms IS NULL",
+                params![timestamp()?, id],
+            )
             .map_err(storage_error)?;
         if changed != 1 {
             return Err(VaultError::DataDamaged);
@@ -207,8 +242,8 @@ impl VaultService {
         let connection = self.open()?;
         let stored = connection
             .query_row(
-                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms
-                 FROM vault_records WHERE id = ?1",
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NULL",
                 params![id],
                 stored_record,
             )
@@ -217,6 +252,112 @@ impl VaultService {
             .ok_or(VaultError::NotFound)?;
         let input = self.decrypt_input(vault_key, &stored)?;
         Ok(Zeroizing::new(input.password.clone()))
+    }
+
+    pub(crate) fn list_deleted(
+        &self,
+        vault_key: &[u8; 32],
+    ) -> Result<Vec<DeletedItem>, VaultError> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE deleted_at_ms IS NOT NULL ORDER BY deleted_at_ms DESC, id ASC",
+            )
+            .map_err(storage_error)?;
+        let records = statement
+            .query_map([], stored_record)
+            .map_err(storage_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage_error)?;
+
+        records
+            .into_iter()
+            .map(|record| {
+                let deleted_at_ms = record.deleted_at_ms.ok_or(VaultError::DataDamaged)?;
+                let input = self.decrypt_input(vault_key, &record)?;
+                Ok(DeletedItem {
+                    id: record.id,
+                    item_type: DeletedItemType::Credential,
+                    title: input.name.clone(),
+                    deleted_at_ms,
+                    original_source: DeletedItemSource::Vault,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn restore(&self, vault_key: &[u8; 32], id: &str) -> Result<(), VaultError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        let stored = transaction
+            .query_row(
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NOT NULL",
+                params![id],
+                stored_record,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or(VaultError::NotFound)?;
+        let _existing = self.decrypt_input(vault_key, &stored)?;
+        if transaction
+            .execute(
+                "UPDATE vault_records SET deleted_at_ms = NULL WHERE id = ?1 AND deleted_at_ms IS NOT NULL",
+                params![id],
+            )
+            .map_err(storage_error)?
+            != 1
+        {
+            return Err(VaultError::NotFound);
+        }
+        transaction.commit().map_err(storage_error)
+    }
+
+    pub(crate) fn permanently_delete(
+        &self,
+        vault_key: &[u8; 32],
+        id: &str,
+    ) -> Result<(), VaultError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction().map_err(storage_error)?;
+        let stored = transaction
+            .query_row(
+                "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms
+                 FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NOT NULL",
+                params![id],
+                stored_record,
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or(VaultError::NotFound)?;
+        let _existing = self.decrypt_input(vault_key, &stored)?;
+        if transaction
+            .execute(
+                "DELETE FROM vault_records WHERE id = ?1 AND deleted_at_ms IS NOT NULL",
+                params![id],
+            )
+            .map_err(storage_error)?
+            != 1
+        {
+            return Err(VaultError::DataDamaged);
+        }
+        transaction.commit().map_err(storage_error)
+    }
+
+    pub(crate) fn purge_deleted_before(
+        &self,
+        vault_key: &[u8; 32],
+        cutoff_ms: i64,
+    ) -> Result<(), VaultError> {
+        let items = self.list_deleted(vault_key)?;
+        for item in items
+            .into_iter()
+            .filter(|item| item.deleted_at_ms < cutoff_ms)
+        {
+            self.permanently_delete(vault_key, &item.id)?;
+        }
+        Ok(())
     }
 
     fn open(&self) -> Result<Connection, VaultError> {
@@ -242,10 +383,21 @@ impl VaultService {
             .map_err(storage_error)?;
         match schema_version {
             0 => initialize_v1_schema(&mut connection, initialization_hook)?,
-            1 => {}
+            1 => {
+                let transaction = connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .map_err(storage_error)?;
+                validate_schema(&transaction, CREATE_VAULT_TABLE_V1_SQL, false)?;
+                transaction
+                    .execute_batch(MIGRATE_VAULT_V1_TO_V2_SQL)
+                    .map_err(storage_error)?;
+                validate_schema(&transaction, CREATE_VAULT_TABLE_V2_SQL, true)?;
+                transaction.commit().map_err(storage_error)?;
+            }
+            2 => {}
             _ => return Err(VaultError::DataDamaged),
         }
-        validate_v1_schema(&connection)?;
+        validate_schema(&connection, CREATE_VAULT_TABLE_V2_SQL, true)?;
         Ok(connection)
     }
 
@@ -294,18 +446,19 @@ fn initialize_v1_schema(
         0 => {
             require_empty_v0_schema(&transaction)?;
             transaction
-                .execute_batch(CREATE_VAULT_TABLE_SQL)
+                .execute_batch(CREATE_VAULT_TABLE_V2_SQL)
                 .map_err(storage_error)?;
             initialization_hook()?;
             transaction
                 .execute_batch(CREATE_VAULT_INDEX_SQL)
                 .map_err(storage_error)?;
             transaction
-                .execute_batch("PRAGMA user_version = 1;")
+                .execute_batch("PRAGMA user_version = 2;")
                 .map_err(storage_error)?;
-            validate_v1_schema(&transaction)?;
+            validate_schema(&transaction, CREATE_VAULT_TABLE_V2_SQL, true)?;
         }
-        1 => validate_v1_schema(&transaction)?,
+        1 => validate_schema(&transaction, CREATE_VAULT_TABLE_V1_SQL, false)?,
+        2 => validate_schema(&transaction, CREATE_VAULT_TABLE_V2_SQL, true)?,
         _ => return Err(VaultError::DataDamaged),
     }
     transaction.commit().map_err(storage_error)
@@ -356,6 +509,7 @@ fn stored_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredRecord> {
         ciphertext: row.get(3)?,
         created_at_ms: row.get(4)?,
         updated_at_ms: row.get(5)?,
+        deleted_at_ms: row.get(6)?,
     })
 }
 
@@ -403,7 +557,11 @@ fn storage_error(error: rusqlite::Error) -> VaultError {
     }
 }
 
-fn validate_v1_schema(connection: &Connection) -> Result<(), VaultError> {
+fn validate_schema(
+    connection: &Connection,
+    expected_table_sql: &str,
+    includes_deleted_at: bool,
+) -> Result<(), VaultError> {
     let mut objects = connection
         .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
         .map_err(storage_error)?;
@@ -439,7 +597,7 @@ fn validate_v1_schema(connection: &Connection) -> Result<(), VaultError> {
             "table",
             "vault_records",
             "vault_records",
-            Some(CREATE_VAULT_TABLE_SQL),
+            Some(expected_table_sql),
         )
     {
         return Err(VaultError::DataDamaged);
@@ -462,7 +620,7 @@ fn validate_v1_schema(connection: &Connection) -> Result<(), VaultError> {
         .map_err(storage_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage_error)?;
-    let expected_columns = [
+    let mut expected_columns = vec![
         (0, "id", "TEXT", 1, 1, 0),
         (1, "format_version", "INTEGER", 1, 0, 0),
         (2, "nonce", "BLOB", 1, 0, 0),
@@ -470,6 +628,9 @@ fn validate_v1_schema(connection: &Connection) -> Result<(), VaultError> {
         (4, "created_at_ms", "INTEGER", 1, 0, 0),
         (5, "updated_at_ms", "INTEGER", 1, 0, 0),
     ];
+    if includes_deleted_at {
+        expected_columns.push((6, "deleted_at_ms", "INTEGER", 0, 0, 0));
+    }
     if columns.len() != expected_columns.len()
         || !columns
             .iter()

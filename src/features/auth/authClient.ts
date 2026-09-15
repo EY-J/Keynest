@@ -5,6 +5,7 @@ import {
   type AuthStatus,
   type RecoveryKeyResult,
   type RecoveryStatus,
+  type PinStatus,
 } from "./types";
 
 type InvokeArguments = Record<string, unknown>;
@@ -36,6 +37,7 @@ export const authClient = {
     invokeAuth<AuthStatus>("complete_recovery_key_display"),
   getRecoveryStatus: () =>
     invokeAuth<RecoveryStatus>("get_recovery_status"),
+  getPinStatus: () => invokeAuth<PinStatus>("get_pin_status"),
   recoverMasterPassword: (recoveryKey: string, newPassword: string) =>
     invokeAuth<RecoveryKeyResult>("recover_master_password", {
       recoveryKey,
@@ -49,6 +51,14 @@ export const authClient = {
     invokeAuth<void>("copy_recovery_key", { recoveryKey }),
   unlock: (password: string) =>
     invokeAuth<AuthStatus>("unlock", { password }),
+  unlockWithPin: (pin: string) =>
+    invokeAuth<AuthStatus>("unlock_with_pin", { pin }),
+  setupPin: (currentPassword: string, pin: string, confirmation: string) =>
+    invokeAuth<PinStatus>("setup_pin", { currentPassword, pin, confirmation }),
+  changePin: (currentPassword: string, pin: string, confirmation: string) =>
+    invokeAuth<PinStatus>("change_pin", { currentPassword, pin, confirmation }),
+  removePin: (currentPassword: string) =>
+    invokeAuth<PinStatus>("remove_pin", { currentPassword }),
   lock: () => invokeAuth<AuthStatus>("lock"),
   changeMasterPassword: (currentPassword: string, newPassword: string) =>
     invokeAuth<AuthStatus>("change_master_password", {

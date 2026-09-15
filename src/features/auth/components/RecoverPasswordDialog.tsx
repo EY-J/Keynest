@@ -110,10 +110,9 @@ export default function RecoverPasswordDialog({
       titleId="recover-password-title" closing={modal.closing} onClose={() => modal.close()}
       onExitComplete={modal.finishClose} pending={isSubmitting}>
         <div className="recovery-modal-header">
-          <p className="auth-eyebrow">OFFLINE RECOVERY</p>
+          <h2 id="recover-password-title">Forgot your Master Password?</h2>
           <ModalCloseButton className="offline-recovery-close" label="Close Offline Recovery" onClick={() => modal.close()} disabled={isSubmitting || modal.closing} />
         </div>
-        <h2 id="recover-password-title">Forgot your Master Password?</h2>
 
         {!showForm ? (
           <div className="recovery-choice-list">

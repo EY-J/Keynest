@@ -5,11 +5,14 @@ import ActivityReporter from "../features/settings/components/ActivityReporter";
 import SettingsProvider, { useSettings } from "../features/settings/SettingsProvider";
 import AppShell from "./AppShell";
 import { useScrollActivity } from "../hooks/useScrollActivity";
+import { ToastProvider } from "../components/ui/Toast/ToastProvider";
 
 export default function App() {
   return (
     <SettingsProvider>
-      <KeyNestApp />
+      <ToastProvider>
+        <KeyNestApp />
+      </ToastProvider>
     </SettingsProvider>
   );
 }

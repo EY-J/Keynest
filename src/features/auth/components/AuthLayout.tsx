@@ -5,7 +5,7 @@ import BrandMark from "../../../components/ui/BrandMark";
 type AuthLayoutProps = {
   eyebrow: string;
   title: string;
-  description: string;
+  description?: string;
   children: ReactNode;
   background?: ReactNode;
 };
@@ -26,7 +26,7 @@ export default function AuthLayout({
           <BrandMark className="auth-mark" />
           <p className="auth-eyebrow">{eyebrow}</p>
           <h1 id="auth-title">{title}</h1>
-          <p className="auth-description">{description}</p>
+          {description ? <p className="auth-description">{description}</p> : null}
           {children}
         </section>
       </main>

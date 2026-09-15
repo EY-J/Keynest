@@ -1,20 +1,23 @@
 import {
-  FolderLock,
+  Folder,
   House,
   KeyRound,
   Lock,
   NotebookPen,
   Settings,
+  Sparkles,
   Star,
+  Trash2,
 } from "lucide-react";
+import type { AuthenticatedDestination } from "../AppShell";
 import ProfileAvatar from "../../features/profile/ProfileAvatar";
 import type { Profile } from "../../features/profile/profileTypes";
 
 type NavigationSidebarProps = {
   isOpen: boolean;
-  activeDestination: "home" | "vault" | "favorites" | "settings";
+  activeDestination: AuthenticatedDestination;
   onClose(): void;
-  onNavigate(destination: "home" | "vault" | "favorites" | "settings"): void;
+  onNavigate(destination: AuthenticatedDestination): void;
   onLockKeynest(): Promise<void>;
   profile: Profile;
 };
@@ -78,15 +81,19 @@ export default function NavigationSidebar({
             <span className="sidebar-link-label">Vault</span>
           </button>
 
-          <button className="sidebar-link" type="button" disabled>
+          <button
+            className={`sidebar-link ${activeDestination === "notes" ? "active" : ""}`}
+            type="button"
+            aria-current={activeDestination === "notes" ? "page" : undefined}
+            onClick={() => onNavigate("notes")}
+          >
             <NotebookPen className="sidebar-link-icon" size={20} aria-hidden="true" />
-            <span className="sidebar-link-label">Secure Notes</span>
-            <span className="sidebar-badge">Soon</span>
+            <span className="sidebar-link-label">Notes</span>
           </button>
 
           <button className="sidebar-link" type="button" disabled>
-            <FolderLock className="sidebar-link-icon" size={20} aria-hidden="true" />
-            <span className="sidebar-link-label">Private Files</span>
+            <Sparkles className="sidebar-link-icon" size={20} aria-hidden="true" />
+            <span className="sidebar-link-label">Placeholder</span>
             <span className="sidebar-badge">Soon</span>
           </button>
         </section>
@@ -109,6 +116,24 @@ export default function NavigationSidebar({
           >
             <Star className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Favorites</span>
+          </button>
+
+          <button className="sidebar-link" type="button" disabled>
+            <Folder className="sidebar-link-icon" size={20} aria-hidden="true" />
+            <span className="sidebar-link-label">Folders</span>
+            <span className="sidebar-badge">Soon</span>
+          </button>
+
+          <button
+            className={`sidebar-link ${
+              activeDestination === "recently-deleted" ? "active" : ""
+            }`}
+            type="button"
+            aria-current={activeDestination === "recently-deleted" ? "page" : undefined}
+            onClick={() => onNavigate("recently-deleted")}
+          >
+            <Trash2 className="sidebar-link-icon" size={20} aria-hidden="true" />
+            <span className="sidebar-link-label">Recently Deleted</span>
           </button>
         </section>
       </nav>

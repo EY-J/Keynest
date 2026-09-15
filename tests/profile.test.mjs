@@ -19,12 +19,13 @@ function profileDependencies(profileClient, prepareProfileImage = async () => ({
   mimeType: "image/png",
   dataBase64: "staged",
   previewUrl: "data:image/png;base64,staged",
-})) {
+}), showToast = () => {}) {
   return {
     "./ProfileSettings.css": {},
     "./ProfileAvatar": { default: "ProfileAvatar" },
     "./profileClient": { profileClient, prepareProfileImage },
     "./profileTypes": { ProfileClientError },
+    "../../components/ui/Toast/ToastProvider": { useToast: () => ({ showToast }) },
   };
 }
 
@@ -33,7 +34,7 @@ test("sidebar profile is display-only and contains no edit affordance", async ()
     isOpen: true, activeDestination: "home", onClose() {}, onNavigate() {},
     async onLockKeynest() {}, profile: customProfile,
   }, {
-    "lucide-react": { FolderLock: "i", House: "i", KeyRound: "i", Lock: "i", NotebookPen: "i", Settings: "i", Star: "i" },
+    "lucide-react": { Folder: "i", House: "i", KeyRound: "i", Lock: "i", NotebookPen: "i", Settings: "i", Sparkles: "i", Star: "i", Trash2: "i" },
     "../../features/profile/ProfileAvatar": { default: "ProfileAvatar" },
     "../../features/profile/profileTypes": {},
   });
@@ -97,8 +98,9 @@ test("Profile panel keeps the requested compact dimensions and responsive stack"
   assert.doesNotMatch(css, /profile-settings-(?:footer|photo-content)/);
 });
 
-test("successful saves use one restartable floating toast with a clean exit", async () => {
+test("successful saves use the shared toast API", async () => {
   let saves = 0;
+  const toasts = [];
   const f = await mount("../src/features/profile/ProfileSettings.tsx", {
     profile: defaultProfile, onSaved() {},
   }, profileDependencies({
@@ -106,7 +108,7 @@ test("successful saves use one restartable floating toast with a clean exit", as
       saves++;
       return { ...defaultProfile, displayName };
     },
-  }));
+  }, undefined, toast => toasts.push(toast)));
 
   const nameInput = () => f.find(node => node.type === "input" && node.props.type === "text");
   nameInput().props.onChange({ currentTarget: { value: "First save" } });
@@ -114,44 +116,26 @@ test("successful saves use one restartable floating toast with a clean exit", as
   f.find(node => node.type === "form").props.onSubmit({ preventDefault() {} });
   await f.flush();
 
-  const firstToast = f.find(node => node.props.className === "profile-save-toast is-visible is-success");
-  assert.equal(firstToast.props.role, "status");
-  assert.equal(firstToast.props["aria-live"], "polite");
-  assert.equal(firstToast.props.children[0].props.children, "Profile saved");
+  assert.equal(JSON.stringify(toasts), JSON.stringify([{
+    type: "success",
+    message: "Profile saved",
+    detail: "Your profile was updated successfully.",
+  }]));
   assert.doesNotMatch(JSON.stringify(f.find(node => node.props.className === "profile-settings-panel")), /Profile saved/);
-  assert.equal(f.find(node => node.props.children === "Profile saved."), undefined);
-  assert.deepEqual([...f.timers.values()], [2_200]);
 
   nameInput().props.onChange({ currentTarget: { value: "Second save" } });
   await f.flush();
   f.find(node => node.type === "form").props.onSubmit({ preventDefault() {} });
   await f.flush();
-  const secondToast = f.find(node => node.props.className === "profile-save-toast is-visible is-success");
   assert.equal(saves, 2);
-  assert.notEqual(secondToast.key, firstToast.key);
-  assert.deepEqual([...f.timers.values()], [2_200]);
-
-  f.expire();
-  await f.flush();
-  const exitingToast = f.find(node => node.props.className === "profile-save-toast is-exiting is-success");
-  assert.equal(exitingToast.props.role, "status");
-  assert.deepEqual([...f.timers.values()], [250]);
-  exitingToast.props.onAnimationEnd({ currentTarget: exitingToast, target: exitingToast });
-  await f.flush();
-  assert.equal(f.find(node => String(node.props.className).startsWith("profile-save-toast")), undefined);
-  assert.equal(f.timers.size, 0);
-
-  nameInput().props.onChange({ currentTarget: { value: "Third save" } });
-  await f.flush();
-  f.find(node => node.type === "form").props.onSubmit({ preventDefault() {} });
-  await f.flush();
-  assert.equal(f.timers.size, 1);
+  assert.equal(toasts.length, 2);
+  assert.deepEqual(toasts[1], toasts[0]);
   f.unmount();
-  assert.equal(f.timers.size, 0);
 });
 
 test("empty display-name validation uses the shared error toast and never saves", async () => {
   let saves = 0;
+  const toasts = [];
   const f = await mount("../src/features/profile/ProfileSettings.tsx", {
     profile: defaultProfile, onSaved() {},
   }, profileDependencies({
@@ -159,7 +143,7 @@ test("empty display-name validation uses the shared error toast and never saves"
       saves++;
       return defaultProfile;
     },
-  }));
+  }, undefined, toast => toasts.push(toast)));
 
   const nameInput = f.find(node => node.type === "input" && node.props.type === "text");
   nameInput.props.onChange({ currentTarget: { value: "   " } });
@@ -167,32 +151,17 @@ test("empty display-name validation uses the shared error toast and never saves"
   f.find(node => node.type === "form").props.onSubmit({ preventDefault() {} });
   await f.flush();
 
-  const toast = f.find(node => node.props.className === "profile-save-toast is-visible is-error");
   assert.equal(saves, 0);
-  assert.equal(toast.props.role, "status");
-  assert.equal(toast.props.children[0].props.children, "Enter a display name.");
-  assert.equal(toast.props.children[1], null);
+  assert.equal(
+    JSON.stringify(toasts),
+    JSON.stringify([{ type: "error", message: "Enter a display name." }]),
+  );
   assert.equal(f.find(node => node.props.role === "alert"), undefined);
   assert.doesNotMatch(
     JSON.stringify(f.find(node => node.props.className === "profile-settings-panel")),
     /Enter a display name\./,
   );
-  assert.deepEqual([...f.timers.values()], [2_200]);
   f.unmount();
-  assert.equal(f.timers.size, 0);
-});
-
-test("Profile save toast is compact, responsive, and animated outside layout flow", async () => {
-  const css = await readFile(new URL("../src/features/profile/ProfileSettings.css", import.meta.url), "utf8");
-  assert.match(css, /\.profile-save-toast\s*\{[^}]*position:\s*fixed;[^}]*right:\s*24px;[^}]*bottom:\s*24px;/s);
-  assert.match(css, /\.profile-save-toast\s*\{[^}]*width:\s*min\(260px,\s*calc\(100vw - 48px\)\);/s);
-  assert.match(css, /\.profile-save-toast\.is-success\s*\{[^}]*var\(--kn-accent\)/s);
-  assert.match(css, /\.profile-save-toast\.is-error\s*\{[^}]*var\(--kn-danger\)/s);
-  assert.match(css, /\.profile-save-toast\.is-visible\s*\{[^}]*profile-save-toast-enter 200ms cubic-bezier\(0\.16,\s*1,\s*0\.3,\s*1\) both;/s);
-  assert.match(css, /\.profile-save-toast\.is-exiting\s*\{[^}]*profile-save-toast-exit 200ms cubic-bezier\(0\.4,\s*0,\s*1,\s*1\) both;/s);
-  assert.match(css, /@keyframes profile-save-toast-enter\s*\{[\s\S]*?translateY\(8px\) scale\(0\.98\)[\s\S]*?translateY\(0\) scale\(1\)/);
-  assert.match(css, /@keyframes profile-save-toast-exit\s*\{[\s\S]*?translateY\(0\) scale\(1\)[\s\S]*?translateY\(6px\) scale\(0\.98\)/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?profile-save-toast-fade-in 60ms linear both;[\s\S]*?profile-save-toast-fade-out 60ms linear both;/);
 });
 
 test("file-picker cancellation returns before any profile state changes", async () => {

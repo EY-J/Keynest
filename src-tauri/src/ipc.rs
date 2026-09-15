@@ -2,7 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::Serialize;
@@ -15,11 +15,13 @@ use crate::{
         AutofillService, HostApprovalCandidate, HostApprovalCompleted, HostApprovalError,
         PendingHostApprovalView,
     },
+    notes::{NoteInput, NoteRecord, NotesError, NotesService},
     platform::startup::{StartupError, StartupService},
     profile::{AvatarUpdate, ProfileError, ProfileService, ProfileSnapshot},
+    recently_deleted::{DeletedItem, DeletedItemType},
     security::{
         AuthError, AuthService, AuthStatus, AutoLockService, ClipboardError, ClipboardService,
-        LockError, RecoveryStatus, SecurityOperationGate,
+        LockError, PinStatus, RecoveryStatus, SecurityOperationGate,
     },
     settings::{SettingsError, SettingsService, SettingsSnapshot},
     vault::{VaultError, VaultRecord, VaultRecordInput, VaultRecordSummary, VaultService},
@@ -161,6 +163,31 @@ impl From<AuthError> for PublicIpcError {
                 message: "Wait a moment before trying again.",
                 retry_after_ms: Some(retry_after_ms),
             },
+            AuthError::InvalidPinFormat => Self::new("invalid-pin-format", "Enter a 6-digit PIN."),
+            AuthError::PinConfirmationMismatch => {
+                Self::new("pin-confirmation-mismatch", "The PINs do not match.")
+            }
+            AuthError::InvalidPin => Self::new("invalid-pin", "The device PIN is incorrect."),
+            AuthError::PinNotConfigured => {
+                Self::new("pin-not-configured", "Device PIN unlock is not configured.")
+            }
+            AuthError::PinAlreadyConfigured => Self::new(
+                "pin-already-configured",
+                "Device PIN unlock is already configured.",
+            ),
+            AuthError::PinThrottled { retry_after_ms } => Self {
+                code: "pin-throttled",
+                message: "Wait a moment before trying the device PIN again.",
+                retry_after_ms: Some(retry_after_ms),
+            },
+            AuthError::PinRequiresMasterPassword => Self::new(
+                "pin-requires-master-password",
+                "Too many incorrect PIN attempts. Use your Master Password to unlock KeyNest.",
+            ),
+            AuthError::DeviceProtectionUnavailable => Self::new(
+                "device-protection-unavailable",
+                "Windows could not protect the device PIN on this account.",
+            ),
             AuthError::InvalidResetConfirmation => Self::new(
                 "invalid-reset-confirmation",
                 "Type RESET KEYNEST exactly to confirm.",
@@ -286,6 +313,31 @@ impl From<VaultError> for PublicIpcError {
             VaultError::StorageUnavailable => Self::new(
                 "vault-storage-error",
                 "KeyNest could not access its encrypted vault data.",
+            ),
+        }
+    }
+}
+
+impl From<NotesError> for PublicIpcError {
+    fn from(error: NotesError) -> Self {
+        match error {
+            NotesError::InvalidTitle => Self::new("invalid-note-title", "Enter a note title."),
+            NotesError::InvalidContent => {
+                Self::new("invalid-note-content", "This note is too long.")
+            }
+            NotesError::InvalidTags => Self::new("invalid-note-tags", "Check the note tags."),
+            NotesError::NotFound => Self::new("note-not-found", "The note was not found."),
+            NotesError::DataDamaged => Self::new(
+                "notes-data-error",
+                "KeyNest's encrypted notes data is damaged or unsupported.",
+            ),
+            NotesError::EntropyUnavailable => Self::new(
+                "notes-entropy-error",
+                "KeyNest could not generate secure notes data.",
+            ),
+            NotesError::StorageUnavailable => Self::new(
+                "notes-storage-error",
+                "KeyNest could not access its encrypted notes data.",
             ),
         }
     }
@@ -422,6 +474,14 @@ fn recovery_status_value(
     auth.recovery_status().map_err(Into::into)
 }
 
+fn pin_status_value(
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<PinStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.pin_status().map_err(Into::into)
+}
+
 fn recover_master_password_value(
     recovery_key: &str,
     new_password: &str,
@@ -476,6 +536,52 @@ pub(crate) fn unlock_and_arm(
     auth.unlock(password)?;
     auto_lock.arm();
     Ok(auth.status())
+}
+
+pub(crate) fn unlock_with_pin_and_arm(
+    pin: &str,
+    auth: &AuthService,
+    auto_lock: &AutoLockService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<AuthStatus, AuthError> {
+    let _guard = operation_gate.lock();
+    auth.unlock_with_pin(pin)?;
+    auto_lock.arm();
+    Ok(auth.status())
+}
+
+fn setup_pin_value(
+    current_password: &str,
+    pin: &str,
+    confirmation: &str,
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<PinStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.setup_pin(current_password, pin, confirmation)?;
+    auth.pin_status().map_err(Into::into)
+}
+
+fn change_pin_value(
+    current_password: &str,
+    pin: &str,
+    confirmation: &str,
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<PinStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.change_pin(current_password, pin, confirmation)?;
+    auth.pin_status().map_err(Into::into)
+}
+
+fn remove_pin_value(
+    current_password: &str,
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<PinStatus, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.remove_pin(current_password)?;
+    auth.pin_status().map_err(Into::into)
 }
 
 pub(crate) fn record_activity_if_unlocked(
@@ -725,6 +831,153 @@ fn delete_vault_record_value(
     })
 }
 
+fn with_notes_key<T>(
+    auth: &AuthService,
+    operation_gate: &SecurityOperationGate,
+    operation: impl FnOnce(&[u8; 32]) -> Result<T, NotesError>,
+) -> Result<T, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.require_vault_key(operation)
+        .map_err(PublicIpcError::from)?
+        .map_err(PublicIpcError::from)
+}
+
+fn list_notes_value(
+    auth: &AuthService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<Vec<NoteRecord>, PublicIpcError> {
+    with_notes_key(auth, operation_gate, |key| notes.list(key))
+}
+
+fn create_note_value(
+    input: NoteInput,
+    auth: &AuthService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<NoteRecord, PublicIpcError> {
+    with_notes_key(auth, operation_gate, |key| notes.create(key, input))
+}
+
+fn update_note_value(
+    id: &str,
+    input: NoteInput,
+    auth: &AuthService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<NoteRecord, PublicIpcError> {
+    with_notes_key(auth, operation_gate, |key| notes.update(key, id, input))
+}
+
+fn delete_note_value(
+    id: &str,
+    auth: &AuthService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    with_notes_key(auth, operation_gate, |key| notes.delete(key, id))
+}
+
+const DELETED_ITEM_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+
+fn deleted_item_cutoff_ms() -> Result<i64, PublicIpcError> {
+    let now: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| PublicIpcError::internal())?
+        .as_millis()
+        .try_into()
+        .map_err(|_| PublicIpcError::internal())?;
+    now.checked_sub(DELETED_ITEM_RETENTION_MS)
+        .ok_or_else(PublicIpcError::internal)
+}
+
+fn list_deleted_items_value(
+    auth: &AuthService,
+    vault: &VaultService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<Vec<DeletedItem>, PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.require_vault_key(|key| {
+        let cutoff = deleted_item_cutoff_ms()?;
+        vault
+            .purge_deleted_before(key, cutoff)
+            .map_err(PublicIpcError::from)?;
+        notes
+            .purge_deleted_before(key, cutoff)
+            .map_err(PublicIpcError::from)?;
+        let mut items = vault.list_deleted(key).map_err(PublicIpcError::from)?;
+        items.extend(notes.list_deleted(key).map_err(PublicIpcError::from)?);
+        items.sort_by(|left, right| {
+            right
+                .deleted_at_ms
+                .cmp(&left.deleted_at_ms)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(items)
+    })
+    .map_err(PublicIpcError::from)?
+}
+
+fn restore_deleted_item_value(
+    id: &str,
+    item_type: DeletedItemType,
+    auth: &AuthService,
+    vault: &VaultService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.require_vault_key(|key| match item_type {
+        DeletedItemType::Credential => vault.restore(key, id).map_err(PublicIpcError::from),
+        DeletedItemType::Note => notes.restore(key, id).map_err(PublicIpcError::from),
+    })
+    .map_err(PublicIpcError::from)?
+}
+
+fn permanently_delete_item_value(
+    id: &str,
+    item_type: DeletedItemType,
+    auth: &AuthService,
+    vault: &VaultService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.require_vault_key(|key| match item_type {
+        DeletedItemType::Credential => vault
+            .permanently_delete(key, id)
+            .map_err(PublicIpcError::from),
+        DeletedItemType::Note => notes
+            .permanently_delete(key, id)
+            .map_err(PublicIpcError::from),
+    })
+    .map_err(PublicIpcError::from)?
+}
+
+fn empty_recently_deleted_value(
+    auth: &AuthService,
+    vault: &VaultService,
+    notes: &NotesService,
+    operation_gate: &SecurityOperationGate,
+) -> Result<(), PublicIpcError> {
+    let _guard = operation_gate.lock();
+    auth.require_vault_key(|key| {
+        for item in vault.list_deleted(key).map_err(PublicIpcError::from)? {
+            vault
+                .permanently_delete(key, &item.id)
+                .map_err(PublicIpcError::from)?;
+        }
+        for item in notes.list_deleted(key).map_err(PublicIpcError::from)? {
+            notes
+                .permanently_delete(key, &item.id)
+                .map_err(PublicIpcError::from)?;
+        }
+        Ok(())
+    })
+    .map_err(PublicIpcError::from)?
+}
+
 fn copy_vault_password_value(
     id: &str,
     auth: &AuthService,
@@ -923,6 +1176,18 @@ pub(crate) async fn get_recovery_status(
         .map_err(|_| PublicIpcError::internal())?
 }
 
+#[tauri::command]
+pub(crate) async fn get_pin_status(
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<PinStatus, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || pin_status_value(&auth, &operation_gate))
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn recover_master_password(
     recovery_key: String,
@@ -1001,6 +1266,122 @@ pub(crate) async fn unlock(
         let result = unlock_and_arm(&password, &auth, &auto_lock, &operation_gate);
         password.zeroize();
         result.map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn unlock_with_pin(
+    pin: String,
+    auth: State<'_, AuthService>,
+    auto_lock: State<'_, AutoLockService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<AuthStatus, PublicIpcError> {
+    let mut pin = Zeroizing::new(pin);
+    let auth = auth.inner().clone();
+    let auto_lock = auto_lock.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = unlock_with_pin_and_arm(&pin, &auth, &auto_lock, &operation_gate);
+        pin.zeroize();
+        result.map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn setup_pin(
+    current_password: String,
+    pin: String,
+    confirmation: String,
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<PinStatus, PublicIpcError> {
+    pin_mutation_command(
+        current_password,
+        pin,
+        confirmation,
+        auth,
+        operation_gate,
+        false,
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn change_pin(
+    current_password: String,
+    pin: String,
+    confirmation: String,
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<PinStatus, PublicIpcError> {
+    pin_mutation_command(
+        current_password,
+        pin,
+        confirmation,
+        auth,
+        operation_gate,
+        true,
+    )
+    .await
+}
+
+async fn pin_mutation_command(
+    current_password: String,
+    pin: String,
+    confirmation: String,
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+    change: bool,
+) -> Result<PinStatus, PublicIpcError> {
+    let mut current_password = Zeroizing::new(current_password);
+    let mut pin = Zeroizing::new(pin);
+    let mut confirmation = Zeroizing::new(confirmation);
+    let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = if change {
+            change_pin_value(
+                &current_password,
+                &pin,
+                &confirmation,
+                &auth,
+                &operation_gate,
+            )
+        } else {
+            setup_pin_value(
+                &current_password,
+                &pin,
+                &confirmation,
+                &auth,
+                &operation_gate,
+            )
+        };
+        current_password.zeroize();
+        pin.zeroize();
+        confirmation.zeroize();
+        result
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn remove_pin(
+    current_password: String,
+    auth: State<'_, AuthService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<PinStatus, PublicIpcError> {
+    let mut current_password = Zeroizing::new(current_password);
+    let auth = auth.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = remove_pin_value(&current_password, &auth, &operation_gate);
+        current_password.zeroize();
+        result
     })
     .await
     .map_err(|_| PublicIpcError::internal())?
@@ -1401,6 +1782,148 @@ pub(crate) async fn delete_vault_record(
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         delete_vault_record_value(&id, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn list_notes(
+    auth: State<'_, AuthService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<NoteRecord>, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || list_notes_value(&auth, &notes, &operation_gate))
+        .await
+        .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn create_note(
+    input: NoteInput,
+    auth: State<'_, AuthService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<NoteRecord, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        create_note_value(input, &auth, &notes, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn update_note(
+    id: String,
+    input: NoteInput,
+    auth: State<'_, AuthService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<NoteRecord, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        update_note_value(&id, input, &auth, &notes, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn delete_note(
+    id: String,
+    auth: State<'_, AuthService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_note_value(&id, &auth, &notes, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn list_deleted_items(
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<DeletedItem>, PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        list_deleted_items_value(&auth, &vault, &notes, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn restore_deleted_item(
+    id: String,
+    item_type: DeletedItemType,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        restore_deleted_item_value(&id, item_type, &auth, &vault, &notes, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn permanently_delete_item(
+    id: String,
+    item_type: DeletedItemType,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        permanently_delete_item_value(&id, item_type, &auth, &vault, &notes, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn empty_recently_deleted(
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let auth = auth.inner().clone();
+    let vault = vault.inner().clone();
+    let notes = notes.inner().clone();
+    let operation_gate = operation_gate.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        empty_recently_deleted_value(&auth, &vault, &notes, &operation_gate)
     })
     .await
     .map_err(|_| PublicIpcError::internal())?

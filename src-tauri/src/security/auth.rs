@@ -3,21 +3,24 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use super::{
     crypto::{
-        generate_recovery_key, unwrap_recovery_vault_key, unwrap_vault_key,
-        wrap_existing_vault_key, wrap_new_vault_key, wrap_recovery_vault_key, CryptoError,
-        EntropySource, KdfParams, VaultKey,
+        generate_recovery_key, unwrap_pin_vault_key, unwrap_recovery_vault_key, unwrap_vault_key,
+        wrap_existing_vault_key, wrap_new_vault_key, wrap_pin_vault_key, wrap_recovery_vault_key,
+        CryptoError, EntropySource, KdfParams, VaultKey,
     },
+    device_protection::{DeviceProtector, OsDeviceProtector},
     password_policy::validate_master_password,
     storage::{ProfileLoad, ProfileStore, StorageError, StoredProfile},
 };
 
 const RESET_CONFIRMATION: &str = "RESET KEYNEST";
+const DEVICE_SECRET_LENGTH: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -40,18 +43,29 @@ pub(crate) struct RecoveryStatus {
     pub configured: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PinStatus {
+    pub configured: bool,
+    pub unlock_available: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct AuthService {
     inner: Arc<Mutex<AuthInner>>,
     store: ProfileStore,
     kdf_params: KdfParams,
     entropy: Arc<dyn EntropySource>,
+    device_protector: Arc<dyn DeviceProtector>,
 }
 
 struct AuthInner {
     state: AuthState,
     failed_attempts: u32,
     last_failed_at: Option<Instant>,
+    pin_failed_attempts: u8,
+    pin_last_failed_at: Option<Instant>,
+    pin_disabled: bool,
 }
 
 enum AuthState {
@@ -70,6 +84,15 @@ impl AuthService {
         kdf_params: KdfParams,
         entropy: Arc<dyn EntropySource>,
     ) -> Self {
+        Self::load_with_device_protector(store, kdf_params, entropy, Arc::new(OsDeviceProtector))
+    }
+
+    pub(crate) fn load_with_device_protector(
+        store: ProfileStore,
+        kdf_params: KdfParams,
+        entropy: Arc<dyn EntropySource>,
+        device_protector: Arc<dyn DeviceProtector>,
+    ) -> Self {
         let state = match store.load() {
             Ok(ProfileLoad::Missing) => AuthState::SetupRequired,
             Ok(ProfileLoad::Valid(profile)) => AuthState::Locked(*profile),
@@ -80,10 +103,14 @@ impl AuthService {
                 state,
                 failed_attempts: 0,
                 last_failed_at: None,
+                pin_failed_attempts: 0,
+                pin_last_failed_at: None,
+                pin_disabled: false,
             })),
             store,
             kdf_params,
             entropy,
+            device_protector,
         }
     }
 
@@ -145,6 +172,21 @@ impl AuthService {
             AuthState::DataError => return Err(AuthError::DataDamaged),
         };
         Ok(RecoveryStatus { configured })
+    }
+
+    pub(crate) fn pin_status(&self) -> Result<PinStatus, AuthError> {
+        let inner = self.lock_inner();
+        let configured = match &inner.state {
+            AuthState::Locked(profile) | AuthState::Unlocked { profile, .. } => {
+                profile.pin_wrapped_key.is_some()
+            }
+            AuthState::SetupRequired => false,
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        Ok(PinStatus {
+            configured,
+            unlock_available: configured && !inner.pin_disabled,
+        })
     }
 
     pub(crate) fn recover_master_password(
@@ -274,6 +316,7 @@ impl AuthService {
             Ok(vault_key) => {
                 inner.failed_attempts = 0;
                 inner.last_failed_at = None;
+                reset_pin_attempts(&mut inner);
                 inner.state = AuthState::Unlocked { profile, vault_key };
                 Ok(())
             }
@@ -289,12 +332,143 @@ impl AuthService {
         }
     }
 
+    pub(crate) fn unlock_with_pin(&self, pin: &str) -> Result<(), AuthError> {
+        self.unlock_with_pin_at(pin, Instant::now())
+    }
+
+    fn unlock_with_pin_at(&self, pin: &str, now: Instant) -> Result<(), AuthError> {
+        validate_pin(pin)?;
+        let mut inner = self.lock_inner();
+        if inner.pin_disabled {
+            return Err(AuthError::PinRequiresMasterPassword);
+        }
+        check_pin_attempt_delay(&inner, now)?;
+        let profile = match &inner.state {
+            AuthState::Locked(profile) => profile.clone(),
+            AuthState::Unlocked { .. } => return Ok(()),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        let wrapped = profile
+            .pin_wrapped_key
+            .as_ref()
+            .ok_or(AuthError::PinNotConfigured)?;
+        let protected = STANDARD
+            .decode(&wrapped.protected_device_secret)
+            .map_err(|_| AuthError::InvalidPin)?;
+        let device_secret = match self.device_protector.unprotect(&protected) {
+            Ok(secret) => secret,
+            Err(_) => return Err(record_failed_pin_attempt(&mut inner, now)),
+        };
+        match unwrap_pin_vault_key(pin, &device_secret, wrapped) {
+            Ok(vault_key) => {
+                reset_pin_attempts(&mut inner);
+                inner.state = AuthState::Unlocked { profile, vault_key };
+                Ok(())
+            }
+            Err(CryptoError::AuthenticationFailed | CryptoError::InvalidMetadata) => {
+                Err(record_failed_pin_attempt(&mut inner, now))
+            }
+            Err(_) => Err(AuthError::LocalDataFailure),
+        }
+    }
+
+    pub(crate) fn setup_pin(
+        &self,
+        current_password: &str,
+        pin: &str,
+        confirmation: &str,
+    ) -> Result<(), AuthError> {
+        self.replace_pin(current_password, pin, confirmation, false)
+    }
+
+    pub(crate) fn change_pin(
+        &self,
+        current_password: &str,
+        pin: &str,
+        confirmation: &str,
+    ) -> Result<(), AuthError> {
+        self.replace_pin(current_password, pin, confirmation, true)
+    }
+
+    fn replace_pin(
+        &self,
+        current_password: &str,
+        pin: &str,
+        confirmation: &str,
+        require_existing: bool,
+    ) -> Result<(), AuthError> {
+        validate_pin(pin)?;
+        if !constant_time_eq(pin.as_bytes(), confirmation.as_bytes()) {
+            return Err(AuthError::PinConfirmationMismatch);
+        }
+        let mut inner = self.lock_inner();
+        let (profile, vault_key) = match &mut inner.state {
+            AuthState::Unlocked { profile, vault_key } => (profile, vault_key),
+            AuthState::Locked(_) => return Err(AuthError::Unauthorized),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        if require_existing && profile.pin_wrapped_key.is_none() {
+            return Err(AuthError::PinNotConfigured);
+        }
+        if !require_existing && profile.pin_wrapped_key.is_some() {
+            return Err(AuthError::PinAlreadyConfigured);
+        }
+        verify_master_password(current_password, profile, vault_key)?;
+
+        let mut device_secret = Zeroizing::new([0_u8; DEVICE_SECRET_LENGTH]);
+        self.entropy
+            .fill(device_secret.as_mut())
+            .map_err(|_| AuthError::LocalDataFailure)?;
+        let protected_device_secret = self
+            .device_protector
+            .protect(device_secret.as_ref())
+            .map_err(|_| AuthError::DeviceProtectionUnavailable)?;
+        let wrapped = wrap_pin_vault_key(
+            pin,
+            device_secret.as_ref(),
+            &protected_device_secret,
+            vault_key.expose(),
+            self.kdf_params,
+            self.entropy.as_ref(),
+        )
+        .map_err(|_| AuthError::LocalDataFailure)?;
+        let replacement = profile.replacing_pin_wrapper(wrapped);
+        self.store.replace(&replacement)?;
+        *profile = replacement;
+        reset_pin_attempts(&mut inner);
+        Ok(())
+    }
+
+    pub(crate) fn remove_pin(&self, current_password: &str) -> Result<(), AuthError> {
+        let mut inner = self.lock_inner();
+        let (profile, vault_key) = match &mut inner.state {
+            AuthState::Unlocked { profile, vault_key } => (profile, vault_key),
+            AuthState::Locked(_) => return Err(AuthError::Unauthorized),
+            AuthState::SetupRequired => return Err(AuthError::NotInitialized),
+            AuthState::DataError => return Err(AuthError::DataDamaged),
+        };
+        if profile.pin_wrapped_key.is_none() {
+            return Err(AuthError::PinNotConfigured);
+        }
+        verify_master_password(current_password, profile, vault_key)?;
+        let replacement = profile.removing_pin_wrapper();
+        self.store.replace(&replacement)?;
+        *profile = replacement;
+        reset_pin_attempts(&mut inner);
+        Ok(())
+    }
+
     pub(crate) fn lock(&self) -> LockOutcome {
         let mut inner = self.lock_inner();
         let previous = std::mem::replace(&mut inner.state, AuthState::DataError);
         let transitioned = matches!(&previous, AuthState::Unlocked { .. });
         inner.state = match previous {
-            AuthState::Unlocked { profile, .. } => AuthState::Locked(profile),
+            AuthState::Unlocked { profile, .. } => {
+                reset_pin_attempts(&mut inner);
+                AuthState::Locked(profile)
+            }
             other => other,
         };
         let status = match inner.state {
@@ -380,6 +554,7 @@ impl AuthService {
         self.store.reset()?;
         inner.failed_attempts = 0;
         inner.last_failed_at = None;
+        reset_pin_attempts(&mut inner);
         inner.state = AuthState::SetupRequired;
         Ok(())
     }
@@ -427,6 +602,22 @@ pub(crate) enum AuthError {
     InvalidRecoveryKey,
     #[error("wait before trying again")]
     Throttled { retry_after_ms: u64 },
+    #[error("the device PIN must contain exactly six digits")]
+    InvalidPinFormat,
+    #[error("the device PIN confirmation does not match")]
+    PinConfirmationMismatch,
+    #[error("the device PIN is incorrect")]
+    InvalidPin,
+    #[error("device PIN unlock is not configured")]
+    PinNotConfigured,
+    #[error("device PIN unlock is already configured")]
+    PinAlreadyConfigured,
+    #[error("wait before trying the device PIN again")]
+    PinThrottled { retry_after_ms: u64 },
+    #[error("use the Master Password for this locked session")]
+    PinRequiresMasterPassword,
+    #[error("Windows device protection is unavailable")]
+    DeviceProtectionUnavailable,
     #[error("type RESET KEYNEST exactly to confirm")]
     InvalidResetConfirmation,
     #[error("KeyNest is locked")]
@@ -451,6 +642,24 @@ fn verify_master_password(
         return Err(AuthError::DataDamaged);
     }
     Ok(())
+}
+
+fn validate_pin(pin: &str) -> Result<(), AuthError> {
+    if pin.len() == 6 && pin.bytes().all(|byte| byte.is_ascii_digit()) {
+        Ok(())
+    } else {
+        Err(AuthError::InvalidPinFormat)
+    }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        difference |= usize::from(
+            left.get(index).copied().unwrap_or(0) ^ right.get(index).copied().unwrap_or(0),
+        );
+    }
+    difference == 0
 }
 
 impl From<StorageError> for AuthError {
@@ -496,6 +705,41 @@ fn record_failed_attempt(inner: &mut AuthInner, now: Instant, error: AuthError) 
     check_attempt_delay(inner, now).err().unwrap_or(error)
 }
 
+fn check_pin_attempt_delay(inner: &AuthInner, now: Instant) -> Result<(), AuthError> {
+    if let Some(last_failed_at) = inner.pin_last_failed_at {
+        let delay = if inner.pin_failed_attempts == 4 {
+            Duration::from_secs(2)
+        } else {
+            Duration::ZERO
+        };
+        let remaining = delay.saturating_sub(now.saturating_duration_since(last_failed_at));
+        if !remaining.is_zero() {
+            return Err(AuthError::PinThrottled {
+                retry_after_ms: remaining.as_nanos().div_ceil(1_000_000) as u64,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn record_failed_pin_attempt(inner: &mut AuthInner, now: Instant) -> AuthError {
+    inner.pin_failed_attempts = inner.pin_failed_attempts.saturating_add(1);
+    inner.pin_last_failed_at = Some(now);
+    if inner.pin_failed_attempts >= 5 {
+        inner.pin_disabled = true;
+        return AuthError::PinRequiresMasterPassword;
+    }
+    check_pin_attempt_delay(inner, now)
+        .err()
+        .unwrap_or(AuthError::InvalidPin)
+}
+
+fn reset_pin_attempts(inner: &mut AuthInner) {
+    inner.pin_failed_attempts = 0;
+    inner.pin_last_failed_at = None;
+    inner.pin_disabled = false;
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -509,8 +753,32 @@ mod tests {
     use super::*;
     use crate::security::{
         crypto::{CryptoError, EntropySource, KdfParams},
+        device_protection::{DeviceProtectionError, DeviceProtector},
         storage::ProfileStore,
     };
+
+    struct FakeDeviceProtector(u8);
+
+    impl DeviceProtector for FakeDeviceProtector {
+        fn protect(&self, plaintext: &[u8]) -> Result<Vec<u8>, DeviceProtectionError> {
+            let mut protected = Vec::with_capacity(plaintext.len() + 2);
+            protected.extend_from_slice(&[0x4b, self.0]);
+            protected.extend(plaintext.iter().map(|byte| byte ^ self.0));
+            Ok(protected)
+        }
+
+        fn unprotect(
+            &self,
+            ciphertext: &[u8],
+        ) -> Result<Zeroizing<Vec<u8>>, DeviceProtectionError> {
+            if ciphertext.get(..2) != Some([0x4b, self.0].as_slice()) {
+                return Err(DeviceProtectionError::Unavailable);
+            }
+            Ok(Zeroizing::new(
+                ciphertext[2..].iter().map(|byte| byte ^ self.0).collect(),
+            ))
+        }
+    }
 
     struct FixedEntropy;
 
@@ -590,7 +858,12 @@ mod tests {
             let temp = tempfile::tempdir().unwrap();
             let params = KdfParams::testing();
             let store = ProfileStore::new(temp.path().to_path_buf());
-            let service = AuthService::load(store, params, Arc::new(FixedEntropy));
+            let service = AuthService::load_with_device_protector(
+                store,
+                params,
+                Arc::new(FixedEntropy),
+                Arc::new(FakeDeviceProtector(0x5a)),
+            );
             Self { temp, service }
         }
 
@@ -599,7 +872,12 @@ mod tests {
             std::fs::write(temp.path().join("profile.json"), bytes).unwrap();
             let params = KdfParams::testing();
             let store = ProfileStore::new(temp.path().to_path_buf());
-            let service = AuthService::load(store, params, Arc::new(FixedEntropy));
+            let service = AuthService::load_with_device_protector(
+                store,
+                params,
+                Arc::new(FixedEntropy),
+                Arc::new(FakeDeviceProtector(0x5a)),
+            );
             Self { temp, service }
         }
 
@@ -1675,6 +1953,261 @@ mod tests {
         assert_eq!(
             service.require_vault_key(|key| *key).unwrap(),
             original_vault_key
+        );
+    }
+
+    #[test]
+    fn pin_setup_wraps_the_existing_vault_key_without_persisting_the_pin() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        let original_key = fixture.service.require_vault_key(|key| *key).unwrap();
+
+        fixture
+            .service
+            .setup_pin("a secure master password", "123456", "123456")
+            .unwrap();
+        assert_eq!(
+            fixture.service.pin_status().unwrap(),
+            PinStatus {
+                configured: true,
+                unlock_available: true
+            }
+        );
+        let profile_bytes = std::fs::read(fixture.temp.path().join("profile.json")).unwrap();
+        assert!(!profile_bytes.windows(6).any(|window| window == b"123456"));
+
+        fixture.service.lock();
+        fixture.service.unlock_with_pin("123456").unwrap();
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            original_key
+        );
+        fixture
+            .service
+            .change_master_password("a secure master password", "a replacement secure password")
+            .unwrap();
+        assert!(fixture.service.pin_status().unwrap().configured);
+        fixture.service.lock();
+        fixture.service.unlock_with_pin("123456").unwrap();
+        fixture.service.lock();
+        fixture
+            .service
+            .unlock("a replacement secure password")
+            .unwrap();
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            original_key
+        );
+    }
+
+    #[test]
+    fn pin_management_requires_the_master_password_and_updates_atomically() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        assert_eq!(
+            fixture.service.setup_pin("wrong", "123456", "123456"),
+            Err(AuthError::InvalidCredentials)
+        );
+        assert!(!fixture.service.pin_status().unwrap().configured);
+        assert_eq!(
+            fixture
+                .service
+                .setup_pin("a secure master password", "123456", "654321"),
+            Err(AuthError::PinConfirmationMismatch)
+        );
+        fixture.service.store.fail_next_replace_for_test();
+        assert_eq!(
+            fixture
+                .service
+                .setup_pin("a secure master password", "123456", "123456"),
+            Err(AuthError::LocalDataFailure)
+        );
+        assert!(!fixture.service.pin_status().unwrap().configured);
+        fixture
+            .service
+            .setup_pin("a secure master password", "123456", "123456")
+            .unwrap();
+        assert_eq!(
+            fixture.service.change_pin("wrong", "654321", "654321"),
+            Err(AuthError::InvalidCredentials)
+        );
+        let before_failed_change = std::fs::read(fixture.temp.path().join("profile.json")).unwrap();
+        fixture.service.store.fail_next_replace_for_test();
+        assert_eq!(
+            fixture
+                .service
+                .change_pin("a secure master password", "654321", "654321"),
+            Err(AuthError::LocalDataFailure)
+        );
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("profile.json")).unwrap(),
+            before_failed_change
+        );
+        fixture.service.lock();
+        fixture.service.unlock_with_pin("123456").unwrap();
+        fixture
+            .service
+            .change_pin("a secure master password", "654321", "654321")
+            .unwrap();
+        fixture.service.lock();
+        assert_eq!(
+            fixture.service.unlock_with_pin("123456"),
+            Err(AuthError::InvalidPin)
+        );
+        fixture.service.unlock_with_pin("654321").unwrap();
+
+        let before_failed_remove = std::fs::read(fixture.temp.path().join("profile.json")).unwrap();
+        assert_eq!(
+            fixture.service.remove_pin("wrong"),
+            Err(AuthError::InvalidCredentials)
+        );
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("profile.json")).unwrap(),
+            before_failed_remove
+        );
+        fixture.service.store.fail_next_replace_for_test();
+        assert_eq!(
+            fixture.service.remove_pin("a secure master password"),
+            Err(AuthError::LocalDataFailure)
+        );
+        assert!(fixture.service.pin_status().unwrap().configured);
+        assert_eq!(
+            std::fs::read(fixture.temp.path().join("profile.json")).unwrap(),
+            before_failed_remove
+        );
+        fixture
+            .service
+            .remove_pin("a secure master password")
+            .unwrap();
+        fixture.service.lock();
+        assert_eq!(
+            fixture.service.unlock_with_pin("654321"),
+            Err(AuthError::PinNotConfigured)
+        );
+        fixture.service.unlock("a secure master password").unwrap();
+    }
+
+    #[test]
+    fn five_bad_pin_attempts_require_master_password_for_only_that_locked_session() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        fixture
+            .service
+            .setup_pin("a secure master password", "123456", "123456")
+            .unwrap();
+        fixture.service.lock();
+        let start = Instant::now();
+        for _ in 0..3 {
+            assert_eq!(
+                fixture.service.unlock_with_pin_at("000000", start),
+                Err(AuthError::InvalidPin)
+            );
+        }
+        assert_eq!(
+            fixture.service.unlock_with_pin_at("000000", start),
+            Err(AuthError::PinThrottled {
+                retry_after_ms: 2_000
+            })
+        );
+        assert!(matches!(
+            fixture.service.unlock_with_pin_at("000000", start),
+            Err(AuthError::PinThrottled { .. })
+        ));
+        assert_eq!(
+            fixture
+                .service
+                .unlock_with_pin_at("000000", start + Duration::from_secs(2)),
+            Err(AuthError::PinRequiresMasterPassword)
+        );
+        assert_eq!(
+            fixture
+                .service
+                .unlock_with_pin_at("123456", start + Duration::from_secs(2)),
+            Err(AuthError::PinRequiresMasterPassword)
+        );
+        fixture.service.unlock("a secure master password").unwrap();
+        fixture.service.lock();
+        fixture.service.unlock_with_pin("123456").unwrap();
+    }
+
+    #[test]
+    fn copied_profile_cannot_use_pin_under_a_different_device_protector() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        fixture
+            .service
+            .setup_pin("a secure master password", "123456", "123456")
+            .unwrap();
+        let copied = tempfile::tempdir().unwrap();
+        std::fs::write(
+            copied.path().join("profile.json"),
+            std::fs::read(fixture.temp.path().join("profile.json")).unwrap(),
+        )
+        .unwrap();
+        let copied_service = AuthService::load_with_device_protector(
+            ProfileStore::new(copied.path().to_path_buf()),
+            KdfParams::testing(),
+            Arc::new(FixedEntropy),
+            Arc::new(FakeDeviceProtector(0xa5)),
+        );
+        assert_eq!(
+            copied_service.unlock_with_pin("123456"),
+            Err(AuthError::InvalidPin)
+        );
+        copied_service.unlock("a secure master password").unwrap();
+    }
+
+    #[test]
+    fn tampered_pin_wrapper_fails_without_blocking_master_password_unlock() {
+        let fixture = AuthFixture::new();
+        fixture.create_unlocked_with_vault();
+        fixture
+            .service
+            .setup_pin("a secure master password", "123456", "123456")
+            .unwrap();
+        let path = fixture.temp.path().join("profile.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let encoded = json["pin_wrapped_key"]["ciphertext"].as_str().unwrap();
+        let mut ciphertext = STANDARD.decode(encoded).unwrap();
+        ciphertext[0] ^= 1;
+        json["pin_wrapped_key"]["ciphertext"] = STANDARD.encode(ciphertext).into();
+        std::fs::write(&path, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+
+        let service = AuthService::load_with_device_protector(
+            ProfileStore::new(fixture.temp.path().to_path_buf()),
+            KdfParams::testing(),
+            Arc::new(FixedEntropy),
+            Arc::new(FakeDeviceProtector(0x5a)),
+        );
+        assert_eq!(
+            service.unlock_with_pin("123456"),
+            Err(AuthError::InvalidPin)
+        );
+        service.unlock("a secure master password").unwrap();
+    }
+
+    #[test]
+    fn recovery_clears_device_pin_enrollment_but_preserves_the_vault_key() {
+        let fixture = AuthFixture::new();
+        let recovery_key = fixture
+            .service
+            .create_master_password("a secure master password")
+            .unwrap();
+        let original_key = fixture.service.require_vault_key(|key| *key).unwrap();
+        fixture
+            .service
+            .setup_pin("a secure master password", "123456", "123456")
+            .unwrap();
+        fixture.service.lock();
+        fixture
+            .service
+            .recover_master_password(&recovery_key, "a replacement secure password")
+            .unwrap();
+        assert!(!fixture.service.pin_status().unwrap().configured);
+        assert_eq!(
+            fixture.service.require_vault_key(|key| *key).unwrap(),
+            original_key
         );
     }
 }

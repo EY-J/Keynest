@@ -16,10 +16,12 @@ export async function vaultFixture(
 ) {
   const calls = [];
   let closed = false;
+  let requestedDelete = null;
   const f = await mount("../src/features/vault/components/CredentialDetailsModal.tsx", {
     credentialId: "a", isFavorite: false,
     onClose: () => { closed = true; }, onChanged: async () => {},
     onToggleFavorite: () => { calls.push(["favorite", "a"]); },
+    onRequestDelete: credential => { requestedDelete = credential; },
   }, {
     "../vaultClient": { vaultClient: {
       getCredentialSummary: async id => { calls.push(["summary", id]); return getSummary(id); },
@@ -40,7 +42,7 @@ export async function vaultFixture(
       Pencil: "Pencil", Star: "Star", Trash2: "Trash2", UserRound: "UserRound", X: "X",
     },
   }, { globals: { URL } });
-  return { ...f, calls, closed: () => closed,
+  return { ...f, calls, closed: () => closed, requestedDelete: () => requestedDelete,
     async click(label) {
       f.find(n => n.type === "button" && (n.props.children === label || n.props["aria-label"] === label)).props.onClick(); await f.flush();
       // Adapter port: shared Modal timing is covered in modal.test.mjs.

@@ -6,10 +6,14 @@ import SettingsRow from "./SettingsRow";
 
 const SAVE_ERROR = "KeyNest could not save this appearance preference.";
 
-const THEME_OPTIONS: Array<{ value: ThemePreference; label: string }> = [
+const THEME_OPTIONS: Array<{
+  value: ThemePreference;
+  label: string;
+  disabled?: boolean;
+}> = [
   { value: "system", label: "System" },
   { value: "dark", label: "Dark" },
-  { value: "light", label: "Light" },
+  { value: "light", label: "Light", disabled: true },
 ];
 
 export default function AppearanceSettings() {
@@ -37,16 +41,20 @@ export default function AppearanceSettings() {
       >
         <fieldset className="theme-segmented" disabled={isSaving}>
           <legend className="sr-only">Theme preference</legend>
-          {THEME_OPTIONS.map(({ value, label }) => (
+          {THEME_OPTIONS.map(({ value, label, disabled = false }) => (
             <label
               key={value}
-              className={settings.theme === value ? "selected" : ""}
+              className={[
+                settings.theme === value ? "selected" : "",
+                disabled ? "disabled" : "",
+              ].filter(Boolean).join(" ")}
             >
               <input
                 type="radio"
                 name="theme"
                 value={value}
                 checked={settings.theme === value}
+                disabled={disabled}
                 onChange={() => void updateTheme(value)}
               />
               <span>{label}</span>

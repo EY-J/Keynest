@@ -103,7 +103,9 @@ async function fixture(changePassword = async () => "unlocked", flow = "change")
     "./modal.css": {},
   };
   modules["../authClient"] = { authClient: {
+    getPinStatus() { return Promise.resolve({ configured: false, unlockAvailable: false }); },
     unlock(...args) { calls.push(args); return changePassword(...args); },
+    unlockWithPin(...args) { calls.push(args); return changePassword(...args); },
     createMasterPassword(...args) { calls.push(args); return changePassword(...args); },
     recoverMasterPassword(...args) { calls.push(args); return changePassword(...args); },
   } };

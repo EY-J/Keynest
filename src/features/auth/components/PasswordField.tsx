@@ -8,6 +8,7 @@ type PasswordFieldProps = {
   autoFocus?: boolean;
   disabled?: boolean;
   inputRef?: Ref<HTMLInputElement>;
+  visuallyHideLabel?: boolean;
 };
 
 export default function PasswordField({
@@ -18,12 +19,13 @@ export default function PasswordField({
   autoFocus = false,
   disabled = false,
   inputRef,
+  visuallyHideLabel = false,
 }: PasswordFieldProps) {
   const inputId = useId();
 
   return (
     <div className="auth-field">
-      <label htmlFor={inputId}>{label}</label>
+      <label className={visuallyHideLabel ? "sr-only" : undefined} htmlFor={inputId}>{label}</label>
       <input
         ref={inputRef}
         id={inputId}
