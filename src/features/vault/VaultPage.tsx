@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import VaultModal from "./components/VaultModal";
 import { ModalCloseButton, useModalClose } from "../../components/ui/Modal/Modal";
 import CredentialDetailsModal from "./components/CredentialDetailsModal";
@@ -42,6 +43,8 @@ export default function VaultPage({
   favoritesOnly = false,
   onToggleFavorite,
 }: VaultPageProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -74,6 +77,14 @@ export default function VaultPage({
   useEffect(() => {
     void loadRecords();
   }, []);
+
+  useEffect(() => {
+    const id = (location.state as { openCredentialId?: unknown } | null)?.openCredentialId;
+    if (typeof id === "string") {
+      setSelectedCredentialId(id);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location, navigate]);
 
   useEffect(() => {
     try {
@@ -184,9 +195,6 @@ export default function VaultPage({
         <section className="vault-empty-state">
           <h2>No credentials yet</h2>
           <p>Add your first credential to keep it protected in KeyNest.</p>
-          <button className="primary-button" type="button" onClick={openAddDialog}>
-            Add Credential
-          </button>
         </section>
       ) : null}
       {!isLoading &&

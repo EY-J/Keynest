@@ -14,14 +14,15 @@ Chromium 106+ is required for document-ID targeting.
 2. Open `chrome://extensions` or `edge://extensions`, enable Developer mode and
    choose **Load unpacked**, selecting this `browser-extension` directory.
    The source is plain JavaScript/HTML/CSS; no build or package install is needed.
-3. Copy the actual extension ID displayed by that browser. Follow the
+3. Confirm the browser displays the stable development extension ID
+   `gliacpngedehcjpjobkpkolfnimlejjm`. Follow the
    [native host setup](../docs/release/browser-autofill-dev-setup.md) to register
-   that exact ID for Chrome or Edge. No ID/signing key is embedded in the manifest.
+   Chrome or Edge; the script derives this ID from the public manifest key.
 4. Open an HTTPS website, open the KeyNest popup, and unlock the vault in KeyNest
    when prompted. Use **Retry** after unlocking or changing the saved credential.
    Click **Fill** beside the intended account; review the website and submit it
    yourself. Another attempt requires Retry to obtain fresh choices.
-5. Repeat registration with Edge's actual ID if testing both browsers. Reload
+5. Repeat registration for Edge if testing both browsers. Reload
    the unpacked extension after changing its source; reopen the popup to retry.
 
 ## Behavior and boundaries
@@ -262,8 +263,9 @@ inside the tool sandbox; running the inspected fixture outside that tool sandbox
 resolved Chromium subprocess access failures. No personal browser profile or
 vault was used.
 
-Manual extension smoke procedure (Chrome and Edge separately): load and register using
-the actual ID; verify unavailable when the endpoint is absent; locked when the
+Manual extension smoke procedure (Chrome and Edge separately): load the extension,
+confirm ID `gliacpngedehcjpjobkpkolfnimlejjm`, and register the host; verify
+unavailable when the endpoint is absent; locked when the
 desktop is locked; correct summaries after unlock/Retry; no matches for a distinct
 hostname; multiple fake accounts listed; explicit Fill changes only the selected
 form and never submits; locked Fill and domain mismatch refuse; navigation/reopen

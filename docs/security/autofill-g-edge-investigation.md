@@ -54,7 +54,7 @@ available evidence does not establish that this failure is exclusive to Edge.
 | --- | --- | --- |
 | Fresh disposable browser launch | Passed | Passed |
 | Load unchanged unpacked extension | Passed | Passed |
-| Actual KeyNest extension ID | `ohjdijkmicaoalcbfgoajkgfnipbefai` | Same ID |
+| Actual KeyNest extension ID | Run-specific pre-stable-key ID | Same ID |
 | Direct popup document rendering | Passed; browser remains responsive | Action popup passed |
 | Invoke `Extensions.triggerAction` | Reproduced browser access violation | Minimal KeyNest action probe passed |
 | Native status/query/Fill through real action | Blocked before this stage | Final regression passed |

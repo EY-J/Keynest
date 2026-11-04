@@ -2,7 +2,7 @@ mod crypto;
 mod model;
 mod service;
 
-pub(crate) use model::{NoteInput, NoteRecord, NotesError};
+pub(crate) use model::{NoteInput, NoteRecord, NoteSummary, NotesError};
 pub(crate) use service::NotesService;
 
 #[cfg(test)]

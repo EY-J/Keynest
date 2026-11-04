@@ -3,5 +3,7 @@
   "description": "KeyNest Autofill Native Host",
   "path": "REPLACE_WITH_ABSOLUTE_HOST_EXE_PATH",
   "type": "stdio",
-  "allowed_origins": []
+  "allowed_origins": [
+    "chrome-extension://gliacpngedehcjpjobkpkolfnimlejjm/"
+  ]
 }

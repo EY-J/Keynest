@@ -1,15 +1,26 @@
 import assert from "node:assert/strict";
+import { createHash, createPublicKey } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 const root = new URL("../browser-extension/", import.meta.url);
 const manifest = JSON.parse(await readFile(new URL("manifest.json", root), "utf8"));
+const nativeHostTemplate = JSON.parse(await readFile(new URL("../docs/release/native-host-manifest.template.json", import.meta.url), "utf8"));
+const stableExtensionId = "gliacpngedehcjpjobkpkolfnimlejjm";
+
+function extensionIdFromKey(key) {
+  return [...createHash("sha256").update(Buffer.from(key, "base64")).digest().subarray(0, 16)]
+    .map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 0x0f))).join("");
+}
 
 test("Autofill manifest is MV3 with exact permissions and restrictive CSP", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.minimum_chrome_version, "106");
   assert.deepEqual(manifest.permissions, ["activeTab", "scripting", "nativeMessaging"]);
-  for (const key of ["host_permissions", "optional_host_permissions", "optional_permissions", "content_scripts", "externally_connectable", "web_accessible_resources", "sandbox", "key", "update_url"]) assert.equal(manifest[key], undefined);
+  for (const key of ["host_permissions", "optional_host_permissions", "optional_permissions", "content_scripts", "externally_connectable", "web_accessible_resources", "sandbox", "update_url"]) assert.equal(manifest[key], undefined);
+  assert.match(manifest.key, /^[A-Za-z0-9+/]+={0,2}$/);
+  assert.equal(createPublicKey({ key: Buffer.from(manifest.key, "base64"), format: "der", type: "spki" }).asymmetricKeyType, "rsa");
+  assert.equal(extensionIdFromKey(manifest.key), stableExtensionId);
   assert.deepEqual(manifest.background, { service_worker: "src/service-worker.js", type: "module" });
   assert.equal(manifest.action.default_popup, "src/popup.html");
   assert.deepEqual(manifest.icons, {
@@ -26,6 +37,10 @@ test("Autofill manifest is MV3 with exact permissions and restrictive CSP", () =
   for (const key of ["default-src", "object-src", "connect-src", "base-uri", "form-action", "frame-src"]) assert.deepEqual(csp[key], ["'none'"]);
   for (const key of ["script-src", "style-src", "img-src"]) assert.deepEqual(csp[key], ["'self'"]);
   assert.doesNotMatch(JSON.stringify(manifest), /<all_urls>|unsafe-|https?:|\*/);
+});
+
+test("native host template allows only the manifest-derived stable extension", () => {
+  assert.deepEqual(nativeHostTemplate.allowed_origins, [`chrome-extension://${extensionIdFromKey(manifest.key)}/`]);
 });
 
 test("all extension executable/assets have no network, persistence, logging, remote imports or submission", async () => {

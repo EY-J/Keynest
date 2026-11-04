@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import NotesToolbar from "./components/NotesToolbar";
 import NotesList from "./components/NotesList";
 import NoteEditorPanel from "./components/NoteEditorPanel";
@@ -25,6 +26,8 @@ function duplicateTitle(title: string, notes: Note[]) {
 }
 
 export default function NotesPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -50,6 +53,13 @@ export default function NotesPage() {
   }, []);
 
   useEffect(() => { void loadNotes(); }, [loadNotes]);
+  useEffect(() => {
+    const id = (location.state as { openNoteId?: unknown } | null)?.openNoteId;
+    if (typeof id === "string") {
+      setSelectedId(id);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location, navigate]);
 
   const visibleNotes = useMemo(() => filterNotes(notes, search), [notes, search]);
   const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
@@ -155,8 +165,6 @@ export default function NotesPage() {
           </aside>
           <NoteEditorPanel
             note={selectedNote}
-            creating={creating}
-            onCreate={() => void createNote()}
             onSaved={replaceNote}
             onDelete={(note) => { setDeleteError(""); setDeletingNote(note); }}
             onDuplicate={(note) => void duplicateNote(note)}

@@ -35,6 +35,7 @@ export async function vaultFixture(
     },
     "./VaultModal": { default: "VaultModal" },
     "./CredentialForm": { default: "CredentialForm" },
+    "../../folders/FolderAssignment": { default: "FolderAssignment" },
     "../../../components/ui/ServiceLogo": { default: "ServiceLogo" },
     "lucide-react": {
       Check: "Check", Copy: "Copy", Eye: "Eye", EyeOff: "EyeOff",

@@ -68,6 +68,30 @@ impl NotesService {
             .collect()
     }
 
+    pub(crate) fn list_summaries(
+        &self,
+        key: &[u8; 32],
+    ) -> Result<Vec<super::NoteSummary>, NotesError> {
+        self.list(key).map(|records| {
+            records
+                .into_iter()
+                .map(|record| super::NoteSummary {
+                    id: record.id.clone(),
+                    title: record.title.clone(),
+                })
+                .collect()
+        })
+    }
+
+    pub(crate) fn get(&self, key: &[u8; 32], id: &str) -> Result<NoteRecord, NotesError> {
+        let connection = self.open()?;
+        let stored = connection.query_row(
+            "SELECT id, format_version, nonce, ciphertext, created_at_ms, updated_at_ms, deleted_at_ms FROM notes WHERE id = ?1 AND deleted_at_ms IS NULL",
+            [id], stored_note,
+        ).optional().map_err(storage_error)?.ok_or(NotesError::NotFound)?;
+        self.decrypt_record(key, stored)
+    }
+
     pub(crate) fn create(
         &self,
         key: &[u8; 32],

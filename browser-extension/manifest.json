@@ -3,6 +3,7 @@
   "name": "KeyNest Autofill",
   "version": "0.1.0",
   "minimum_chrome_version": "106",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuJCxWxAjM7SOvvF/CFHHmlM5WAsSx2+vauhf5kSAIbDFJGN2+6IvS9w7xvLU6ka+hbWXdSO/6mgXp8fiZzNCOUMZClMro2szFDYfVUlc2ttU3udbIpnorEtbQWjOuPeVQrq2xKeElC+h4el2GHSSJLqgmaLElN6XPAcVPnbqTADyv2kh/MpJut5q4EgsoFQvuq4nlp+WMR2g6Tq99YFXuCr6TxIDIJL38JH4q8aVO4f+fEokz5Q0J6MtI/btLbHPEqDdezBG9l1fKutKzWv1ForopfYwJq855f/8khudc2/UAfLszKTSuTcvPlxmLfRVtcgLcCkIvFWGAwyfb3RxdwIDAQAB",
   "description": "Manually fill saved logins from your local KeyNest desktop vault.",
   "icons": {
     "16": "icons/keynest-16.png",
