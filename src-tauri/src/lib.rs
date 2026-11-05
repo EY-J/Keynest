@@ -1,5 +1,6 @@
 mod autofill;
 mod diagnostics;
+mod folders;
 mod ipc;
 mod notes;
 mod platform;
@@ -13,6 +14,7 @@ pub(crate) mod vault;
 use std::{sync::Arc, time::Duration};
 
 use autofill::TauriHostApprovalEventSink;
+use folders::FolderService;
 use ipc::DataFolderService;
 use notes::NotesService;
 use platform::startup::{
@@ -102,6 +104,10 @@ pub fn run() {
             let vault = VaultService::new(app_data_dir.clone(), Arc::new(OsEntropy));
             app.manage(vault.clone());
             app.manage(NotesService::new(app_data_dir, Arc::new(OsEntropy)));
+            app.manage(FolderService::new(
+                app.path().app_data_dir()?,
+                Arc::new(OsEntropy),
+            ));
             app.manage(
                 AutofillService::new(auth.clone(), vault, operation_gate.clone())
                     .with_host_approval_events(Arc::new(TauriHostApprovalEventSink::new(
@@ -186,9 +192,18 @@ pub fn run() {
             ipc::copy_vault_password,
             ipc::copy_vault_username,
             ipc::list_notes,
+            ipc::list_note_summaries,
             ipc::create_note,
             ipc::update_note,
             ipc::delete_note,
+            ipc::list_folders,
+            ipc::create_folder,
+            ipc::rename_folder,
+            ipc::delete_folder,
+            ipc::list_folder_items,
+            ipc::get_folder_contents,
+            ipc::assign_credential_folder,
+            ipc::assign_note_folder,
             ipc::list_deleted_items,
             ipc::restore_deleted_item,
             ipc::permanently_delete_item,

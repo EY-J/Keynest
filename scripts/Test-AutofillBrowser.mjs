@@ -78,7 +78,7 @@ try {
   process.stdout.write(`${browserName} native acceptance: ${version.product}\n`);
   const { id } = await browser.send("Extensions.loadUnpacked", { path: path.resolve("browser-extension"), enableInIncognito: false });
   process.stdout.write(`Actual unpacked extension ID: ${id}\n`);
-  await ps("register-autofill-host.ps1", ["-Browser", browserName, "-ExtensionId", id,
+  await ps("register-autofill-host.ps1", ["-Browser", browserName,
     "-HostExePath", path.resolve("src-tauri/target/autofill-acceptance/debug/keynest-native-host.exe"), "-ManifestDirectory", manifestDirectory]);
   registered = true;
   const targets = (await browser.send("Target.getTargets", { filter: [{}] })).targetInfos;

@@ -3,7 +3,10 @@
 Checkpoint D provides the Windows native host and per-user registration scripts.
 Checkpoints E/F provide the loadable MV3 extension with explicit Fill. The browser
 setup below can now be followed for status, matching and filling on Chromium 106+.
-No extension ID is guessed. Checkpoint G and V1 are complete (2026-09-08).
+The committed public manifest key gives the unpacked extension the stable ID
+`gliacpngedehcjpjobkpkolfnimlejjm` in both Chrome and Edge. The registration
+script derives that ID from the key rather than accepting a manually copied ID.
+Checkpoint G and V1 are complete (2026-09-08).
 Both browsers passed user-performed manual acceptance and final regressions passed.
 See the [completion record](../security/autofill-v1-completion.md).
 
@@ -28,17 +31,19 @@ desktop bundles have not been changed to install/register the host; production
 packaging and executable signing remain outside this V1 development acceptance.
 Do not relocate the registered host executable without rerunning registration.
 
-## Obtain actual extension IDs
+## Load and verify the extension
 
 1. Open `chrome://extensions` or `edge://extensions`, enable Developer mode and
    load the repository's `browser-extension` directory unpacked. It requires no
    separate build step or dependency installation.
-2. Copy the actual extension ID shown by that browser. It must be 32 lowercase
-   characters from `a` through `p`. The IDs may differ between Chrome and Edge.
-3. Run registration with that actual ID. An unpacked extension moved to another
-   path/profile may receive a different ID; register the observed ID again.
+2. Confirm the extension card shows ID `gliacpngedehcjpjobkpkolfnimlejjm`.
+   Chrome and Edge derive the same value from the public RSA key committed in
+   `browser-extension/manifest.json`, independent of checkout path or profile.
+3. If a previously loaded KeyNest checkout shows another ID, remove that unpacked
+   extension and load this repository's `browser-extension` directory again.
 
-No stable signing key or store publishing is part of V1 development setup.
+The manifest contains only the public key needed for development identity. No
+private key is stored or required, and this does not publish the extension to a store.
 
 ## Register Chrome or Edge
 
@@ -46,11 +51,8 @@ Run in PowerShell from the repository root as your ordinary Windows user:
 
 ```powershell
 $nativeHost = (Resolve-Path 'src-tauri/target/debug/keynest-native-host.exe').Path
-$chromeId = Read-Host 'Actual unpacked Chrome extension ID'
-./scripts/register-autofill-host.ps1 -Browser Chrome -ExtensionId $chromeId -HostExePath $nativeHost
-
-$edgeId = Read-Host 'Actual unpacked Edge extension ID'
-./scripts/register-autofill-host.ps1 -Browser Edge -ExtensionId $edgeId -HostExePath $nativeHost
+./scripts/register-autofill-host.ps1 -Browser Chrome -HostExePath $nativeHost
+./scripts/register-autofill-host.ps1 -Browser Edge -HostExePath $nativeHost
 ```
 
 Each script supports `-WhatIf`. If local policy blocks these inspected development
@@ -60,11 +62,11 @@ administrator privileges are required by the scripts.
 
 The host name is `com.eyy.keynest.autofill`. Generated manifests use an absolute
 local executable path, `type: "stdio"` and exact
-`chrome-extension://<actual-ID>/` origins. Wildcards and malformed IDs are rejected.
-`-ExtensionId` also accepts an array of exact IDs when both are deliberately
-authorized; a single browser-specific ID is sufficient for separate registrations.
-The JSON template in this directory has an empty allowlist until real IDs are
-supplied. It is a reference template, not an installable manifest.
+`chrome-extension://gliacpngedehcjpjobkpkolfnimlejjm/` origins. Wildcards and
+malformed IDs are rejected. The JSON template in this directory records that
+development origin, but remains a reference template because its executable path
+is a placeholder. The registration script reads the manifest key as the source of
+truth and writes a browser-specific installable manifest.
 
 Default manifests are UTF-8 without BOM in `%LOCALAPPDATA%\KeyNest\Autofill`:
 
@@ -197,7 +199,7 @@ The seeder refuses an existing acceptance data directory. Its passwords are
 synthetic fixture constants and must never be used for personal credentials.
 The native runner reports only pass labels, browser/extension versions and IDs,
 and fixed product status text; field comparisons return booleans. Each run
-temporarily registers its actual extension ID in the selected browser's HKCU
+temporarily registers the stable manifest-derived extension ID in the selected browser's HKCU
 location using a manifest inside its temporary profile, then unregisters before
 profile deletion. Existing foreign registrations cause refusal, not overwrite.
 Keep the normal desktop closed until the absent-desktop check finishes.
@@ -286,7 +288,7 @@ and seed instructions above. Never point this runner at the personal desktop.
    startup traffic, native/browser stderr or another log source, report that
    check as **pending**, rather than passing it. Do not open personal browser or
    desktop data. Press Enter only when ready to clean up this review session.
-5. Report Chrome and Edge separately: browser version/actual extension ID,
+5. Report Chrome and Edge separately: browser version/extension ID,
    load/popup/status/matching/Fill/no-submit/lock/domain results, storage/network/
    log review results, and any fixed failure stage or exit code. Send **pass,
    fail or pending**, with no credentials, usernames, payloads or secret-bearing

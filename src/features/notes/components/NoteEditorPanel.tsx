@@ -3,7 +3,6 @@ import {
   Copy,
   FolderPlus,
   MoreHorizontal,
-  Plus,
   Star,
   Trash2,
 } from "lucide-react";
@@ -14,11 +13,10 @@ import {
 } from "../../../components/ui/square-pen";
 import type { Note, NoteInput } from "../types";
 import { notesClient } from "../notesClient";
+import FolderAssignmentDialog from "../../folders/FolderAssignmentDialog";
 
 type NoteEditorPanelProps = {
   note: Note | null;
-  creating: boolean;
-  onCreate(): void;
   onSaved(note: Note): void;
   onDelete(note: Note): void;
   onDuplicate(note: Note): void;
@@ -29,8 +27,6 @@ type EditorMode = "edit" | "preview";
 
 export default function NoteEditorPanel({
   note,
-  creating,
-  onCreate,
   onSaved,
   onDelete,
   onDuplicate,
@@ -40,6 +36,7 @@ export default function NoteEditorPanel({
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<"" | "Saving..." | "Saved" | "Save failed" | "Title required">("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [folderDialogNoteId, setFolderDialogNoteId] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<EditorMode>("edit");
   const revisionRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -79,6 +76,7 @@ export default function NoteEditorPanel({
 
   useEffect(() => {
     setMenuOpen(false);
+    setFolderDialogNoteId(null);
     setEditorMode("edit");
   }, [note?.id]);
 
@@ -148,16 +146,6 @@ export default function NoteEditorPanel({
       <section className="notes-detail-panel notes-no-selection">
         <h2>No note selected</h2>
         <p>Select a note or create a new one.</p>
-        <button
-          className="primary-button notes-empty-add"
-          type="button"
-          aria-label="New note"
-          title="New note"
-          onClick={onCreate}
-          disabled={creating}
-        >
-          <Plus size={18} aria-hidden="true" />
-        </button>
       </section>
     );
   }
@@ -185,6 +173,11 @@ export default function NoteEditorPanel({
     if (!note || !draft) return;
     setMenuOpen(false);
     onDuplicate({ ...note, ...draft });
+  }
+
+  function selectFolderAction() {
+    setMenuOpen(false);
+    if (note) setFolderDialogNoteId(note.id);
   }
 
   function selectDeleteAction() {
@@ -229,6 +222,7 @@ export default function NoteEditorPanel({
   }
 
   return (
+    <>
     <section className="notes-detail-panel notes-editor-panel">
       <header className="notes-editor-header">
         {editorMode === "edit" ? (
@@ -318,10 +312,9 @@ export default function NoteEditorPanel({
                 />
                 <span>{draft.favorite ? "Remove from favorites" : "Add to favorites"}</span>
               </button>
-              <button type="button" role="menuitem" disabled>
+              <button type="button" role="menuitem" onClick={selectFolderAction}>
                 <FolderPlus size={15} aria-hidden="true" />
                 <span>Add to folder</span>
-                <small>Soon</small>
               </button>
               <button type="button" role="menuitem" onClick={selectDuplicateAction}>
                 <Copy size={15} aria-hidden="true" />
@@ -361,5 +354,15 @@ export default function NoteEditorPanel({
         </div>
       )}
     </section>
+    {folderDialogNoteId === note.id ? (
+      <FolderAssignmentDialog
+        key={note.id}
+        kind="note"
+        itemId={note.id}
+        onClose={() => setFolderDialogNoteId(null)}
+        fallbackFocusRef={menuTriggerRef}
+      />
+    ) : null}
+    </>
   );
 }

@@ -71,7 +71,7 @@ available regression/manual evidence. Paths below are relative to the repository
 | 3 | No all_urls permission | PASS: manifest and policy tests; no host_permissions. |
 | 4 | User-triggered activeTab access | PASS: popup action/Retry and explicit Fill; worker validates popup sender and current tab, window, URL and document. |
 | 5 | Browser/native uses Native Messaging | PASS: worker native connection, native_host framing and real browser acceptance. |
-| 6 | Exact extension allowed_origins | PASS: registration helper generates exact loaded extension IDs; rejects malformed IDs; ownership/rollback tests passed. |
+| 6 | Exact extension allowed_origins | PASS: registration helper generates the exact manifest-derived extension origin; rejects malformed IDs; ownership/rollback tests passed. |
 | 7 | Host never decrypts vault files | PASS: native_host relays bounded typed messages; no AuthService/VaultService or vault-file access in host path. |
 | 8 | Host talks only to local running app | PASS: fixed current-user/session Windows pipe; no app launch, unlock or remote fallback. |
 | 9 | No localhost HTTP/WebSocket server | PASS: Autofill uses stdio and named pipes; browser fixtures use inherited DevTools pipes, not a debugging server. Existing Vite development server is not an Autofill transport. |
@@ -114,7 +114,7 @@ secret already delivered to the browser before locking.
 5. **Host name:** com.eyy.keynest.autofill.
 6. **Registry:** HKCU\Software\Google\Chrome\NativeMessagingHosts\com.eyy.keynest.autofill
    and HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.eyy.keynest.autofill.
-   Separate browser manifests contain exact actual extension IDs; no wildcard.
+   Separate browser manifests contain the exact authorized extension origin; no wildcard.
 7. **IPC:** local named pipe keyed by current SID/session, current-user-only DACL,
    remote clients rejected, first-instance ownership and session checks on both
    ends. Client uses identification-only security quality of service. Bounded

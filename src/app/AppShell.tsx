@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { useSettings } from "../features/settings/SettingsProvider";
 import HostApprovalModal from "../features/autofill/components/HostApprovalModal";
 import {
@@ -7,6 +8,7 @@ import {
   toggleFavoriteCredentialId,
 } from "../features/vault/credentialFavorites";
 import HomePage from "../features/home/HomePage";
+import FoldersPage from "../features/folders/FoldersPage";
 import NotesPage from "../features/notes/NotesPage";
 import RecentlyDeletedPage from "../features/recently-deleted/RecentlyDeletedPage";
 import VaultPage from "../features/vault/VaultPage";
@@ -18,8 +20,6 @@ import {
 } from "../features/profile/profileTypes";
 import AppTitleBar from "./components/AppTitleBar";
 import NavigationSidebar from "./components/NavigationSidebar";
-
-export type AuthenticatedDestination = "home" | "vault" | "notes" | "favorites" | "recently-deleted" | "settings";
 
 type AppShellProps = {
   onLockKeynest: () => Promise<void>;
@@ -36,8 +36,6 @@ export default function AppShell({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
   const [profileError, setProfileError] = useState("");
-  const [activeDestination, setActiveDestination] =
-    useState<AuthenticatedDestination>("home");
   const [favoriteCredentialIds, setFavoriteCredentialIds] = useState<Set<string>>(
     loadFavoriteCredentialIds,
   );
@@ -83,11 +81,6 @@ export default function AppShell({
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [isSidebarOpen]);
 
-  function navigate(destination: AuthenticatedDestination) {
-    setActiveDestination(destination);
-    setIsSidebarOpen(false);
-  }
-
   function toggleFavorite(credentialId: string) {
     setFavoriteCredentialIds((current) =>
       toggleFavoriteCredentialId(current, credentialId),
@@ -103,9 +96,7 @@ export default function AppShell({
 
       <NavigationSidebar
         isOpen={isSidebarOpen}
-        activeDestination={activeDestination}
         onClose={() => setIsSidebarOpen(false)}
-        onNavigate={navigate}
         onLockKeynest={onLockKeynest}
         profile={profile}
       />
@@ -130,28 +121,47 @@ export default function AppShell({
         </p>
       ) : null}
 
-      {activeDestination === "home" ? (
-        <HomePage onNavigate={navigate} />
-      ) : activeDestination === "notes" ? (
-        <NotesPage />
-      ) : activeDestination === "recently-deleted" ? (
-        <RecentlyDeletedPage />
-      ) : activeDestination === "vault" || activeDestination === "favorites" ? (
-        <VaultPage
-          favoriteCredentialIds={favoriteCredentialIds}
-          favoritesOnly={activeDestination === "favorites"}
-          onToggleFavorite={toggleFavorite}
+      <Routes>
+        <Route path="/" element={<Navigate to="/home" replace />} />
+        <Route path="/home" element={<HomePage />} />
+        <Route
+          path="/vault"
+          element={(
+            <VaultPage
+              favoriteCredentialIds={favoriteCredentialIds}
+              favoritesOnly={false}
+              onToggleFavorite={toggleFavorite}
+            />
+          )}
         />
-      ) : (
-        <SettingsPage
-          profile={profile}
-          onProfileSaved={(savedProfile) => {
-            setProfile(savedProfile);
-            setProfileError("");
-          }}
-          onResetAuthenticated={onResetAuthenticated}
+        <Route path="/notes" element={<NotesPage />} />
+        <Route path="/folders" element={<FoldersPage />} />
+        <Route
+          path="/favorites"
+          element={(
+            <VaultPage
+              favoriteCredentialIds={favoriteCredentialIds}
+              favoritesOnly={true}
+              onToggleFavorite={toggleFavorite}
+            />
+          )}
         />
-      )}
+        <Route path="/recently-deleted" element={<RecentlyDeletedPage />} />
+        <Route
+          path="/settings"
+          element={(
+            <SettingsPage
+              profile={profile}
+              onProfileSaved={(savedProfile) => {
+                setProfile(savedProfile);
+                setProfileError("");
+              }}
+              onResetAuthenticated={onResetAuthenticated}
+            />
+          )}
+        />
+        <Route path="*" element={<Navigate to="/home" replace />} />
+      </Routes>
       <HostApprovalModal />
     </div>
   );

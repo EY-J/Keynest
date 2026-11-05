@@ -495,8 +495,6 @@ time {
 .notes-no-selection h2 { margin: 0; color: var(--kn-text); }
 .notes-no-selection p { margin: 7px 0 0; }
 
-.notes-empty-add { margin-inline: auto; }
-
 .notes-delete-dialog h2 { margin: 0; }
 .notes-delete-message {
   color: var(--kn-muted);
@@ -668,6 +666,7 @@ time {
   border-radius: 10px;
   background: transparent;
   color: var(--sidebar-text);
+  text-decoration: none;
   text-align: left;
   font-size: 13px;
   font-weight: 500;
@@ -2755,7 +2754,6 @@ footer {
 .vault-list-name strong { overflow: hidden; font-size: 0.77rem; font-weight: 600; text-overflow: ellipsis; }
 .vault-status, .vault-empty-state, .vault-load-error { padding: 30px; border: 1px solid var(--kn-border); border-radius: 16px; background: var(--kn-surface); color: var(--kn-muted); text-align: center; }
 .vault-empty-state h2, .vault-empty-state p { margin-top: 0; }
-.vault-empty-state .primary-button { margin-top: 8px; }
 .vault-load-error { border-color: var(--kn-danger); color: var(--kn-danger); }
 .vault-load-error .secondary-button { margin-top: 6px; }
 
@@ -3293,12 +3291,11 @@ footer {
   width: 100%;
 }
 
-.notes-page button.notes-add-button,
-.notes-page button.notes-empty-add {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-  min-height: 40px;
+.notes-page button.notes-add-button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -3306,19 +3303,9 @@ footer {
   line-height: 0;
 }
 
-.notes-page button.notes-add-button {
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  min-height: 36px;
-}
-
 .notes-page .notes-add-button svg {
   width: 16px;
   height: 16px;
-}
-
-.notes-page :is(.notes-add-button, .notes-empty-add) > svg {
   display: block;
 }
 
@@ -4134,10 +4121,6 @@ footer {
   font-size: 0.76rem;
 }
 
-.notes-page .notes-no-selection .notes-empty-add {
-  margin: 16px 0 0;
-}
-
 @media (max-width: 760px) {
   .notes-page {
     height: auto;
@@ -4172,3 +4155,29 @@ footer {
 }
 
 
+.folders-page .vault-page-heading { align-items: center; }
+.folders-page .vault-page-heading > .primary-button { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border-radius: 10px; font-size: .85rem; }
+.folders-workspace { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.folders-list, .folders-detail { border: 1px solid var(--kn-border); border-radius: 16px; background: var(--kn-surface); overflow: hidden; }
+.folders-list-item, .folders-content-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--kn-border); background: transparent; color: var(--kn-text); text-align: left; cursor: pointer; }
+.folders-list-item:last-child, .folders-content-item:last-child { border-bottom: 0; }
+.folders-list-item:hover, .folders-list-item.selected, .folders-content-item:hover { background: var(--kn-accent-soft); }
+.folders-list-item span { display: grid; gap: 3px; min-width: 0; }
+.folders-list-item strong, .folders-content-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folders-list-item small { color: var(--kn-muted); }
+.folders-detail { min-height: 220px; padding: 18px; }
+.folders-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.folders-detail-heading h2 { margin: 0; }
+.folders-detail-heading > div { display: flex; gap: 8px; }
+.folders-detail section { margin-top: 20px; }
+.folders-detail section h3 { margin: 0 0 8px; font-size: .85rem; color: var(--kn-muted); }
+.folders-content-item { border-radius: 8px; }
+.folders-form-label { display: block; margin: 16px 0 7px; }
+#folder-name { width: 100%; padding: 10px 12px; border: 1px solid var(--kn-border); border-radius: 8px; background: var(--kn-surface); color: var(--kn-text); }
+.folder-assignment { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0; color: var(--kn-muted); }
+.folder-assignment select { min-width: 150px; max-width: 100%; padding: 7px 10px; border: 1px solid var(--kn-border); border-radius: 8px; background: var(--kn-surface); color: var(--kn-text); }
+.folder-assignment .vault-form-error { flex-basis: 100%; margin: 0; }
+.vault-record-detail > .folder-assignment { padding: 12px 0; }
+.folder-assignment-dialog .folder-assignment { align-items: stretch; flex-direction: column; margin: 18px 0; }
+.folder-assignment-dialog .folder-assignment select { width: 100%; }
+@media (max-width: 720px) { .folders-workspace { grid-template-columns: 1fr; } .folders-detail-heading { align-items: flex-start; flex-direction: column; } }

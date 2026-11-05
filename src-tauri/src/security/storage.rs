@@ -193,6 +193,10 @@ impl ProfileStore {
     }
 
     pub(crate) fn reset(&self) -> Result<(), StorageError> {
+        remove_if_present(&self.app_data_dir.join("folders.db-journal"))?;
+        remove_if_present(&self.app_data_dir.join("folders.db-wal"))?;
+        remove_if_present(&self.app_data_dir.join("folders.db-shm"))?;
+        remove_if_present(&self.app_data_dir.join("folders.db"))?;
         remove_if_present(&self.app_data_dir.join("notes.enc-journal"))?;
         remove_if_present(&self.app_data_dir.join("notes.enc-wal"))?;
         remove_if_present(&self.app_data_dir.join("notes.enc-shm"))?;
@@ -404,6 +408,8 @@ mod tests {
         std::fs::write(temp.path().join("notes.enc-journal"), b"journal").unwrap();
         std::fs::write(temp.path().join("notes.enc-wal"), b"wal").unwrap();
         std::fs::write(temp.path().join("notes.enc-shm"), b"shm").unwrap();
+        std::fs::write(temp.path().join("folders.db"), b"folders").unwrap();
+        std::fs::write(temp.path().join("folders.db-journal"), b"journal").unwrap();
         std::fs::write(temp.path().join("keep.txt"), b"keep").unwrap();
 
         store.reset().unwrap();
@@ -417,6 +423,8 @@ mod tests {
         assert!(!temp.path().join("notes.enc-journal").exists());
         assert!(!temp.path().join("notes.enc-wal").exists());
         assert!(!temp.path().join("notes.enc-shm").exists());
+        assert!(!temp.path().join("folders.db").exists());
+        assert!(!temp.path().join("folders.db-journal").exists());
         assert!(temp.path().join("keep.txt").exists());
     }
 

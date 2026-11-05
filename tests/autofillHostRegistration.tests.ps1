@@ -24,6 +24,9 @@ try {
     [IO.File]::WriteAllText($exe, 'fixture - never executed')
     $chrome = Get-KeyNestHostPlan Chrome $fixture
     $edge = Get-KeyNestHostPlan Edge $fixture
+    $extensionManifest = Join-Path $PSScriptRoot '../browser-extension/manifest.json'
+    $stableExtensionId = Get-KeyNestExtensionId $extensionManifest
+    Assert-True ($stableExtensionId -ceq 'gliacpngedehcjpjobkpkolfnimlejjm')
     Assert-True ($chrome.RegistrySubkey -eq 'Software\Google\Chrome\NativeMessagingHosts\com.eyy.keynest.autofill')
     Assert-True ($edge.RegistrySubkey -eq 'Software\Microsoft\Edge\NativeMessagingHosts\com.eyy.keynest.autofill')
     $manifest = New-KeyNestHostManifest @(('a' * 32), ('b' * 32)) $exe
@@ -40,6 +43,10 @@ try {
     $saved = Get-Content -LiteralPath $chrome.ManifestPath -Raw | ConvertFrom-Json
     Assert-True ($saved.allowed_origins[0] -eq ('chrome-extension://' + ('a' * 32) + '/'))
     Assert-True ($registry[$chrome.RegistrySubkey] -eq $chrome.ManifestPath)
+    Install-KeyNestHost $chrome (New-KeyNestHostManifest @(('d' * 32)) $exe)
+    $replaced = Get-Content -LiteralPath $chrome.ManifestPath -Raw | ConvertFrom-Json
+    Assert-True ($replaced.allowed_origins[0] -eq ('chrome-extension://' + ('d' * 32) + '/'))
+    Assert-True (@(Get-ChildItem -LiteralPath $fixture -Filter '*.bak').Count -eq 0)
     $before = [IO.File]::ReadAllText($chrome.ManifestPath)
     $failRegistry = $true
     Assert-Rejected { Install-KeyNestHost $chrome (New-KeyNestHostManifest @(('d' * 32)) $exe) }
@@ -54,7 +61,7 @@ try {
     Assert-True ([IO.File]::Exists($edge.ManifestPath))
     Uninstall-KeyNestHost $chrome # idempotent
     Uninstall-KeyNestHost $edge
-    Write-Output 'PASS: exact IDs, local paths, UTF-8 manifest, separate browsers, rollback, ownership, and idempotent unregister (mock registry).'
+    Write-Output 'PASS: stable manifest-derived ID, exact origins, local paths, UTF-8 manifest, separate browsers, rollback, ownership, and idempotent unregister (mock registry).'
 } finally {
     # Delete only direct fixture files and the now-empty directory, never recurse.
     Get-ChildItem -LiteralPath $fixture -File | ForEach-Object { Remove-Item -LiteralPath $_.FullName }

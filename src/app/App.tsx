@@ -1,5 +1,6 @@
 import "../styles/globals.css";
 import { useState } from "react";
+import { HashRouter } from "react-router-dom";
 import AuthGate from "../features/auth/components/AuthGate";
 import ActivityReporter from "../features/settings/components/ActivityReporter";
 import SettingsProvider, { useSettings } from "../features/settings/SettingsProvider";
@@ -9,11 +10,13 @@ import { ToastProvider } from "../components/ui/Toast/ToastProvider";
 
 export default function App() {
   return (
-    <SettingsProvider>
-      <ToastProvider>
-        <KeyNestApp />
-      </ToastProvider>
-    </SettingsProvider>
+    <HashRouter>
+      <SettingsProvider>
+        <ToastProvider>
+          <KeyNestApp />
+        </ToastProvider>
+      </SettingsProvider>
+    </HashRouter>
   );
 }
 

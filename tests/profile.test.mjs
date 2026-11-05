@@ -33,10 +33,11 @@ function profileDependencies(profileClient, prepareProfileImage = async () => ({
 
 test("sidebar profile is display-only and contains no edit affordance", async () => {
   const f = await mount("../src/app/components/NavigationSidebar.tsx", {
-    isOpen: true, activeDestination: "home", onClose() {}, onNavigate() {},
+    isOpen: true, onClose() {},
     async onLockKeynest() {}, profile: customProfile,
   }, {
     "lucide-react": { Folder: "i", House: "i", KeyRound: "i", Lock: "i", NotebookPen: "i", Settings: "i", Sparkles: "i", Star: "i", Trash2: "i" },
+    "react-router-dom": { NavLink: "NavLink" },
     "../../features/profile/ProfileAvatar": { default: "ProfileAvatar" },
     "../../features/profile/profileTypes": {},
   });
@@ -49,10 +50,11 @@ test("sidebar profile is display-only and contains no edit affordance", async ()
 
 test("sidebar does not present the fallback as a saved first-time display name", async () => {
   const f = await mount("../src/app/components/NavigationSidebar.tsx", {
-    isOpen: true, activeDestination: "home", onClose() {}, onNavigate() {},
+    isOpen: true, onClose() {},
     async onLockKeynest() {}, profile: defaultProfile,
   }, {
     "lucide-react": { Folder: "i", House: "i", KeyRound: "i", Lock: "i", NotebookPen: "i", Settings: "i", Sparkles: "i", Star: "i", Trash2: "i" },
+    "react-router-dom": { NavLink: "NavLink" },
     "../../features/profile/ProfileAvatar": { default: "ProfileAvatar" },
     "../../features/profile/profileTypes": {},
   });

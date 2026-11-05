@@ -53,6 +53,11 @@ const messages: Record<string, string> = {
   "notes-data-error": "KeyNest could not verify your notes data.",
   "notes-entropy-error": "KeyNest could not generate secure notes data.",
   "notes-storage-error": "KeyNest could not access its encrypted notes data.",
+  "invalid-folder-name": "Enter a folder name of at most 100 characters.",
+  "duplicate-folder-name": "A folder with this name already exists.",
+  "folder-not-found": "The folder was not found.",
+  "folder-storage-error": "KeyNest could not access folders.",
+  "folder-data-error": "KeyNest folder data is damaged or unsupported.",
   "host-approval-unavailable": "This login-host approval request is no longer available.",
 };
 

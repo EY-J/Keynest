@@ -30,6 +30,13 @@ pub(crate) struct NoteRecord {
     pub updated_at_ms: i64,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NoteSummary {
+    pub id: String,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum NotesError {
     #[error("note title is invalid")]

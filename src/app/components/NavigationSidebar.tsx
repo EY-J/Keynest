@@ -9,24 +9,20 @@ import {
   Star,
   Trash2,
 } from "lucide-react";
-import type { AuthenticatedDestination } from "../AppShell";
+import { NavLink } from "react-router-dom";
 import ProfileAvatar from "../../features/profile/ProfileAvatar";
 import type { Profile } from "../../features/profile/profileTypes";
 
 type NavigationSidebarProps = {
   isOpen: boolean;
-  activeDestination: AuthenticatedDestination;
   onClose(): void;
-  onNavigate(destination: AuthenticatedDestination): void;
   onLockKeynest(): Promise<void>;
   profile: Profile;
 };
 
 export default function NavigationSidebar({
   isOpen,
-  activeDestination,
   onClose,
-  onNavigate,
   onLockKeynest,
   profile,
 }: NavigationSidebarProps) {
@@ -57,39 +53,35 @@ export default function NavigationSidebar({
             Library
           </h2>
 
-          <button
-            className={`sidebar-link ${
-              activeDestination === "home" ? "active" : ""
-            }`}
-            type="button"
-            aria-current={activeDestination === "home" ? "page" : undefined}
-            onClick={() => onNavigate("home")}
+          <NavLink
+            className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+            to="/home"
+            end
+            onClick={onClose}
           >
             <House className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Home</span>
-          </button>
+          </NavLink>
 
-          <button
-            className={`sidebar-link ${
-              activeDestination === "vault" ? "active" : ""
-            }`}
-            type="button"
-            aria-current={activeDestination === "vault" ? "page" : undefined}
-            onClick={() => onNavigate("vault")}
+          <NavLink
+            className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+            to="/vault"
+            end
+            onClick={onClose}
           >
             <KeyRound className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Vault</span>
-          </button>
+          </NavLink>
 
-          <button
-            className={`sidebar-link ${activeDestination === "notes" ? "active" : ""}`}
-            type="button"
-            aria-current={activeDestination === "notes" ? "page" : undefined}
-            onClick={() => onNavigate("notes")}
+          <NavLink
+            className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+            to="/notes"
+            end
+            onClick={onClose}
           >
             <NotebookPen className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Notes</span>
-          </button>
+          </NavLink>
 
           <button className="sidebar-link" type="button" disabled>
             <Sparkles className="sidebar-link-icon" size={20} aria-hidden="true" />
@@ -106,50 +98,43 @@ export default function NavigationSidebar({
             Quick Access
           </h2>
 
-          <button
-            className={`sidebar-link ${
-              activeDestination === "favorites" ? "active" : ""
-            }`}
-            type="button"
-            aria-current={activeDestination === "favorites" ? "page" : undefined}
-            onClick={() => onNavigate("favorites")}
+          <NavLink
+            className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+            to="/favorites"
+            end
+            onClick={onClose}
           >
             <Star className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Favorites</span>
-          </button>
+          </NavLink>
 
-          <button className="sidebar-link" type="button" disabled>
+          <NavLink className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`} to="/folders" end onClick={onClose}>
             <Folder className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Folders</span>
-            <span className="sidebar-badge">Soon</span>
-          </button>
+          </NavLink>
 
-          <button
-            className={`sidebar-link ${
-              activeDestination === "recently-deleted" ? "active" : ""
-            }`}
-            type="button"
-            aria-current={activeDestination === "recently-deleted" ? "page" : undefined}
-            onClick={() => onNavigate("recently-deleted")}
+          <NavLink
+            className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+            to="/recently-deleted"
+            end
+            onClick={onClose}
           >
             <Trash2 className="sidebar-link-icon" size={20} aria-hidden="true" />
             <span className="sidebar-link-label">Recently Deleted</span>
-          </button>
+          </NavLink>
         </section>
       </nav>
 
       <div className="sidebar-footer">
-        <button
-          className={`sidebar-link ${
-            activeDestination === "settings" ? "active" : ""
-          }`}
-          type="button"
-          aria-current={activeDestination === "settings" ? "page" : undefined}
-          onClick={() => onNavigate("settings")}
+        <NavLink
+          className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+          to="/settings"
+          end
+          onClick={onClose}
         >
           <Settings className="sidebar-link-icon" size={20} aria-hidden="true" />
           <span className="sidebar-link-label">Settings</span>
-        </button>
+        </NavLink>
 
         <button
           className="sidebar-link sidebar-lock-button"

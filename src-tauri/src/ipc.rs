@@ -15,7 +15,8 @@ use crate::{
         AutofillService, HostApprovalCandidate, HostApprovalCompleted, HostApprovalError,
         PendingHostApprovalView,
     },
-    notes::{NoteInput, NoteRecord, NotesError, NotesService},
+    folders::{Folder, FolderError as StorageFolderError, FolderItem, FolderService},
+    notes::{NoteInput, NoteRecord, NoteSummary, NotesError, NotesService},
     platform::startup::{StartupError, StartupService},
     profile::{AvatarUpdate, ProfileError, ProfileService, ProfileSnapshot},
     recently_deleted::{DeletedItem, DeletedItemType},
@@ -338,6 +339,31 @@ impl From<NotesError> for PublicIpcError {
             NotesError::StorageUnavailable => Self::new(
                 "notes-storage-error",
                 "KeyNest could not access its encrypted notes data.",
+            ),
+        }
+    }
+}
+
+impl From<StorageFolderError> for PublicIpcError {
+    fn from(error: StorageFolderError) -> Self {
+        match error {
+            StorageFolderError::InvalidName => Self::new(
+                "invalid-folder-name",
+                "Enter a folder name of at most 100 characters.",
+            ),
+            StorageFolderError::DuplicateName => Self::new(
+                "duplicate-folder-name",
+                "A folder with this name already exists.",
+            ),
+            StorageFolderError::NotFound => {
+                Self::new("folder-not-found", "The folder was not found.")
+            }
+            StorageFolderError::StorageUnavailable => {
+                Self::new("folder-storage-error", "KeyNest could not access folders.")
+            }
+            StorageFolderError::DataDamaged => Self::new(
+                "folder-data-error",
+                "KeyNest folder data is damaged or unsupported.",
             ),
         }
     }
@@ -1799,6 +1825,205 @@ pub(crate) async fn delete_vault_record(
     let operation_gate = operation_gate.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         delete_vault_record_value(&id, &auth, &vault, &operation_gate)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn list_folders(
+    auth: State<'_, AuthService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<Folder>, PublicIpcError> {
+    let (auth, folders, gate) = (
+        auth.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        require_unlocked(&auth)?;
+        folders.list().map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn create_folder(
+    name: String,
+    auth: State<'_, AuthService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Folder, PublicIpcError> {
+    let (auth, folders, gate) = (
+        auth.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        require_unlocked(&auth)?;
+        folders.create(&name).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn rename_folder(
+    id: String,
+    name: String,
+    auth: State<'_, AuthService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Folder, PublicIpcError> {
+    let (auth, folders, gate) = (
+        auth.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        require_unlocked(&auth)?;
+        folders.rename(&id, &name).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn delete_folder(
+    id: String,
+    auth: State<'_, AuthService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let (auth, folders, gate) = (
+        auth.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        require_unlocked(&auth)?;
+        folders.delete(&id).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn list_folder_items(
+    auth: State<'_, AuthService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<FolderItem>, PublicIpcError> {
+    let (auth, folders, gate) = (
+        auth.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        require_unlocked(&auth)?;
+        folders.items().map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn get_folder_contents(
+    folder_id: String,
+    auth: State<'_, AuthService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<FolderItem>, PublicIpcError> {
+    let (auth, folders, gate) = (
+        auth.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        require_unlocked(&auth)?;
+        folders.contents(&folder_id).map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn assign_credential_folder(
+    id: String,
+    folder_id: Option<String>,
+    auth: State<'_, AuthService>,
+    vault: State<'_, VaultService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let (auth, vault, folders, gate) = (
+        auth.inner().clone(),
+        vault.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        auth.require_vault_key(|key| vault.get(key, &id).map(drop))
+            .map_err(PublicIpcError::from)?
+            .map_err(PublicIpcError::from)?;
+        folders
+            .assign("credential", &id, folder_id.as_deref())
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn assign_note_folder(
+    id: String,
+    folder_id: Option<String>,
+    auth: State<'_, AuthService>,
+    notes: State<'_, NotesService>,
+    folders: State<'_, FolderService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<(), PublicIpcError> {
+    let (auth, notes, folders, gate) = (
+        auth.inner().clone(),
+        notes.inner().clone(),
+        folders.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = gate.lock();
+        auth.require_vault_key(|key| notes.get(key, &id).map(drop))
+            .map_err(PublicIpcError::from)?
+            .map_err(PublicIpcError::from)?;
+        folders
+            .assign("note", &id, folder_id.as_deref())
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|_| PublicIpcError::internal())?
+}
+
+#[tauri::command]
+pub(crate) async fn list_note_summaries(
+    auth: State<'_, AuthService>,
+    notes: State<'_, NotesService>,
+    operation_gate: State<'_, SecurityOperationGate>,
+) -> Result<Vec<NoteSummary>, PublicIpcError> {
+    let (auth, notes, gate) = (
+        auth.inner().clone(),
+        notes.inner().clone(),
+        operation_gate.inner().clone(),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        with_notes_key(&auth, &gate, |key| notes.list_summaries(key))
     })
     .await
     .map_err(|_| PublicIpcError::internal())?

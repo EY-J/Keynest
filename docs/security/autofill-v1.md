@@ -592,7 +592,7 @@ The tool never stopped or queried the personal desktop or vault.
 
 Chrome **152.0.7977.82** passed ten native checks plus a separate absent-desktop
 check. The unchanged unpacked extension's actual ID was
-`ohjdijkmicaoalcbfgoajkgfnipbefai`; the runner registered that exact ID through
+the run-specific pre-stable-key extension ID; the runner registered that exact ID through
 the existing HKCU script, then removed the registration and temporary manifest.
 The browser launched the real Rust host, which contacted the running isolated
 desktop through the production named pipe. Desktop unlock and lock used its

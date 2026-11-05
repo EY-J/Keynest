@@ -2,6 +2,23 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-KeyNestExtensionId([string]$ExtensionManifestPath) {
+    $manifest = Get-Content -LiteralPath $ExtensionManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($manifest.manifest_version -ne 3 -or [string]::IsNullOrWhiteSpace($manifest.key)) {
+        throw 'The KeyNest Manifest V3 extension must contain its public key.'
+    }
+    try { $publicKey = [Convert]::FromBase64String($manifest.key) }
+    catch { throw 'The KeyNest extension manifest key must be valid base64.' }
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { $digest = $sha256.ComputeHash($publicKey) } finally { $sha256.Dispose() }
+    $id = [Text.StringBuilder]::new(32)
+    foreach ($byte in $digest[0..15]) {
+        $null = $id.Append([char]([int][char]'a' + ($byte -shr 4)))
+        $null = $id.Append([char]([int][char]'a' + ($byte -band 0x0f)))
+    }
+    return $id.ToString()
+}
+
 function Get-KeyNestHostPlan([string]$Browser, [string]$ManifestDirectory) {
     if ($Browser -notin @('Chrome', 'Edge')) { throw 'Select Chrome or Edge.' }
     $vendor = if ($Browser -eq 'Chrome') { 'Google\Chrome' } else { 'Microsoft\Edge' }
@@ -16,7 +33,7 @@ function Get-KeyNestHostPlan([string]$Browser, [string]$ManifestDirectory) {
 }
 
 function New-KeyNestHostManifest([string[]]$ExtensionId, [string]$HostExePath) {
-    if ($ExtensionId.Count -eq 0) { throw 'Supply the actual unpacked extension ID.' }
+    if ($ExtensionId.Count -eq 0) { throw 'Supply the extension ID derived from the manifest public key.' }
     foreach ($id in $ExtensionId) {
         if ($id -cnotmatch '^[a-p]{32}$') { throw 'Extension IDs must contain exactly 32 lowercase letters a-p.' }
     }
@@ -75,10 +92,11 @@ function Install-KeyNestHost($Plan, $Manifest) {
     $previous = if ($hadManifest) { [IO.File]::ReadAllBytes($Plan.ManifestPath) } else { $null }
     $null = [IO.Directory]::CreateDirectory($Plan.Directory)
     $temporary = [IO.Path]::Combine($Plan.Directory, ([guid]::NewGuid().ToString() + '.tmp'))
+    $backup = [IO.Path]::Combine($Plan.Directory, ([guid]::NewGuid().ToString() + '.bak'))
     try {
         $json = $Manifest | ConvertTo-Json -Depth 4
         [IO.File]::WriteAllText($temporary, $json, [Text.UTF8Encoding]::new($false))
-        if ($hadManifest) { [IO.File]::Replace($temporary, $Plan.ManifestPath, $null) }
+        if ($hadManifest) { [IO.File]::Replace($temporary, $Plan.ManifestPath, $backup) }
         else { [IO.File]::Move($temporary, $Plan.ManifestPath) }
         try { Set-KeyNestHostRegistration $Plan.RegistrySubkey $Plan.ManifestPath }
         catch {
@@ -88,6 +106,7 @@ function Install-KeyNestHost($Plan, $Manifest) {
         }
     } finally {
         if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+        if ([IO.File]::Exists($backup)) { [IO.File]::Delete($backup) }
     }
 }
 

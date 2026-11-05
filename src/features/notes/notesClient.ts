@@ -15,6 +15,7 @@ async function invokeNotes<T>(command: string, argumentsValue?: Record<string, u
 
 export const notesClient = {
   list: () => invokeNotes<Note[]>("list_notes"),
+  listSummaries: () => invokeNotes<Pick<Note, "id" | "title">[]>("list_note_summaries"),
   create: (input: NoteInput) => invokeNotes<Note>("create_note", { input }),
   update: (id: string, input: NoteInput) => invokeNotes<Note>("update_note", { id, input }),
   delete: (id: string) => invokeNotes<void>("delete_note", { id }),

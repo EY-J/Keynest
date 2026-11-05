@@ -33,6 +33,11 @@ export async function mount(relative, props, dependencies = {}, environment = {}
         if (!prev || deps.some((v, n) => !Object.is(v, prev.deps[n]))) hooks[i] = { deps, fn };
         return hooks[i].fn;
       },
+      useMemo(fn, deps) {
+        const i = cursor++, prev = hooks[i];
+        if (!prev || deps.some((v, n) => !Object.is(v, prev.deps[n]))) hooks[i] = { deps, value: fn() };
+        return hooks[i].value;
+      },
       useEffect(fn, deps) {
         const i = cursor++, prev = hooks[i];
         if (!prev || deps.some((v, n) => !Object.is(v, prev.deps[n]))) {

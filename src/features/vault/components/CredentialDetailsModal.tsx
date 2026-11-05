@@ -7,6 +7,7 @@ import VaultModal from "./VaultModal";
 import { ModalCloseButton, useModalClose } from "../../../components/ui/Modal/Modal";
 import ServiceLogo from "../../../components/ui/ServiceLogo";
 import CredentialForm from "./CredentialForm";
+import FolderAssignment from "../../folders/FolderAssignment";
 
 type CredentialDetailsModalProps = {
   credentialId: string;
@@ -429,6 +430,7 @@ export default function CredentialDetailsModal({
       ) : null}
       {credentialSummary && !isEditing ? (
         <div className="vault-record-detail">
+          <FolderAssignment kind="credential" itemId={credentialId} />
           <div className="vault-detail-row">
             <UserRound className="vault-detail-row-icon" size={21} aria-hidden="true" />
             <div className="vault-detail-row-copy">

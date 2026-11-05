@@ -1,23 +1,22 @@
 import {
   FileText,
+  Folder,
   LockKeyhole,
   Settings,
   Star,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import BrandMark from "../../components/ui/BrandMark";
 
 type HomeDestination =
   | "vault"
   | "notes"
   | "favorites"
+  | "folders"
   | "recently-deleted"
   | "settings";
-
-type HomePageProps = {
-  onNavigate: (destination: HomeDestination) => void;
-};
 
 type AvailableDestination = {
   destination: HomeDestination;
@@ -29,6 +28,7 @@ const availableDestinations: AvailableDestination[] = [
   { destination: "vault", icon: LockKeyhole, label: "Vault" },
   { destination: "notes", icon: FileText, label: "Notes" },
   { destination: "favorites", icon: Star, label: "Favorites" },
+  { destination: "folders", icon: Folder, label: "Folders" },
   {
     destination: "recently-deleted",
     icon: Trash2,
@@ -37,7 +37,9 @@ const availableDestinations: AvailableDestination[] = [
   { destination: "settings", icon: Settings, label: "Settings" },
 ];
 
-export default function HomePage({ onNavigate }: HomePageProps) {
+export default function HomePage() {
+  const navigate = useNavigate();
+
   return (
     <main className="home-content home-welcome">
       <div className="home-welcome__inner">
@@ -68,14 +70,14 @@ export default function HomePage({ onNavigate }: HomePageProps) {
             <button
               className="primary-button home-welcome__action"
               type="button"
-              onClick={() => onNavigate("vault")}
+              onClick={() => navigate("/vault")}
             >
               Open Vault
             </button>
             <button
               className="secondary-button home-welcome__action"
               type="button"
-              onClick={() => onNavigate("notes")}
+              onClick={() => navigate("/notes")}
             >
               Open Notes
             </button>
@@ -94,7 +96,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
                   className="home-welcome__destination"
                   type="button"
                   key={destination}
-                  onClick={() => onNavigate(destination)}
+                  onClick={() => navigate(`/${destination}`)}
                 >
                   <DestinationIcon
                     size={15}
